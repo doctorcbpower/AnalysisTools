@@ -20,9 +20,14 @@ class HaloTools:
     def ReadHaloCatalogue(self):
         if self.halocatfileformat=='SubFind':
             with h5py.File(self.halocatfilename,'r') as f:
+                NumFiles=f['Header'].attrs['NumFiles']
+                self.TotNgroups=f['Header'].attrs['Ngroups_Total'][()]
+                self.TotNsubgroups=f['Header'].attrs['Nsubhalos_Total'][()]
+                print('Reading data for %d groups and %d subgroups'%(self.TotNgroups,self.TotNsubgroups))
+
                 # # Read Halo Properties
                 self.GroupAscale=f['Group/GroupAscale'][()]
-                self.GroupFirstSub=f['Group/GroupFirstSub'][()]
+                self.GroupFirstSub=f['Group/GroupFirstSub'][()] # ID of main subhalo
                 self.GroupMass=f['Group/GroupMass'][()]  # This is the total mass in the FOF group
                 self.GroupNsubs=f['Group/GroupNsubs'][()]
                 self.GroupPos=f['Group/GroupPos'][()]
@@ -33,15 +38,15 @@ class HaloTools:
                 self.GroupOffsetType=f['Group/GroupOffsetType'][()]
 
                 # # Read Subhalo Properties
-                SubhaloRankInGr=f['Subhalo/SubhaloRankInGr'][()]  # 0 is a field halo
+                self.SubhaloRankInGr=f['Subhalo/SubhaloRankInGr'][()]  # 0 is a field halo
                 
-                self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubhaloLen=f['Subhalo/SubhaloLen'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubPos=f['Subhalo/SubhaloPos'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubVel=f['Subhalo/SubhaloVel'][()][np.where(SubhaloRankInGr!=0)[0]]                
-                self.SubMass=f['Subhalo/SubhaloMass'][()][np.where(SubhaloRankInGr!=0)[0]]
-
+                self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()]
+                self.SubhaloLen=f['Subhalo/SubhaloLen'][()]
+                self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()]
+                self.SubPos=f['Subhalo/SubhaloPos'][()]
+                self.SubVel=f['Subhalo/SubhaloVel'][()]
+                self.SubMass=f['Subhalo/SubhaloMass'][()]
+                
         elif self.halocatfileformat=='SubFind-EAGLE':
             filename=self.halocatfilename+'.hdf5'
             if os.path.exists(filename)==False:
