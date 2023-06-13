@@ -43,9 +43,9 @@ class HaloTools:
                 self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()]
                 self.SubhaloLen=f['Subhalo/SubhaloLen'][()]
                 self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()]
-                self.SubPos=f['Subhalo/SubhaloPos'][()]
-                self.SubVel=f['Subhalo/SubhaloVel'][()]
-                self.SubMass=f['Subhalo/SubhaloMass'][()]
+                self.SubhaloPos=f['Subhalo/SubhaloPos'][()]
+                self.SubhaloVel=f['Subhalo/SubhaloVel'][()]
+                self.SubhaloMass=f['Subhalo/SubhaloMass'][()]
                 
         elif self.halocatfileformat=='SubFind-EAGLE':
             filename=self.halocatfilename+'.hdf5'
