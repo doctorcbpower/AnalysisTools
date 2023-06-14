@@ -19,8 +19,16 @@ class TreeTools:
         self.treefileformat=treefileformat
         self.comoving_units=comoving_units                
 
-    def ReadMergerTreeFile(self):
+    def ReadMergerTreeCatalogue(self):
         if self.treefileformat=='SubFind':
+            # The SubFind-dervied tree contains a
+            #   * TreeTable - with Tree IDs, Lengths, Offsets
+            #   * TreeTimes - with expansion factors and redshifts
+            #   * TreeHalos - with information about the subhalos, that are
+            #                 the structures that are linked, and the links
+            #                 between progenitors and descendents, as well
+            #                 as subhalos in the same FOF structure
+
             with h5py.File(self.treefilename,'r') as f:
 
                 header_info=dict(f['Header'].attrs.items())
@@ -29,8 +37,7 @@ class TreeTools:
                     print('Warning: no trees in file...')
                     return -1
                 else:
-                    print('Found %d merger trees in file...'%header_info['Ntrees_Total'])                    
-                    
+                    print('Found %d merger trees in file...'%header_info['Ntrees_Total'])
                 # Read information from the header
                 self.LastSnapShotNr=header_info['LastSnapShotNr']   # Final snapshot of simulation to create tree
                 self.Nhalos_ThisFile=header_info['Nhalos_ThisFile'] # Number of halos in file
@@ -51,9 +58,9 @@ class TreeTools:
                 self.BoxSize=f['Parameters'].attrs['BoxSize']
             
                 # Read Halo Properties
-                self.GrpNr=f['TreeHalos/GroupNr'][()]
-                self.SubhaloNr=f['TreeHalos/SubhaloNr'][()]            
-                self.SnapNum=f['TreeHalos/SnapNum'][()]
+                self.GrpNr=f['TreeHalos/GroupNr'][()]               # Group number in halo catalogue at SnapNum
+                self.SubhaloNr=f['TreeHalos/SubhaloNr'][()]         # Corresponding subhalo number in halo catalogue at SnapNum
+                self.SnapNum=f['TreeHalos/SnapNum'][()]             # Snapshot and halo catalogue number
                 self.GrpM200=f['TreeHalos/Group_M_Crit200'][()]
                 self.SubhaloMass=f['TreeHalos/SubhaloMass'][()]
                 self.SubhaloPos=f['TreeHalos/SubhaloPos'][()]
@@ -80,9 +87,9 @@ class TreeTools:
                 self.TreeHalosIndex=f['TreeHalos/TreeIndex'][()]
                 # Table Information
                 # IDs
-                self.TreeLength=f['TreeTable/Length'][()]
-                self.TreeOffset=f['TreeTable/StartOffset'][()]
-                self.TreeID=f['TreeTable/TreeID'][()]          
+                self.TreeID=f['TreeTable/TreeID'][()]        # Unique ID of tree
+                self.TreeLength=f['TreeTable/Length'][()]    # Length of tree
+                self.TreeOffset=f['TreeTable/StartOffset'][()]  # Offset within catalogue of tree
         elif self.treefileformat=='TreeFrog':
             with h5py.File(self.treefilename,'r') as f:
                 
@@ -124,16 +131,57 @@ class TreeTools:
                             self.SubhaloPos[group]/=ScaleFactor
                             self.SubhaloMass[group]*=HubbleParam
                          
-                                                    
-    def TrackMainHaloProgenitor(self,HaloID):
+    def TrackMainHaloProgenitor(self,MainSubhaloID,SnapshotNr):
+        """ Assumes the SubFind MergerTree structure - this tracks the first progenitor of a given subhalo identified in a halo catalogue at a given snapshot number.
+    
+            Receives MainSubhaloID, which can be obtained from GroupFirstSub in the subhalo catalogue for a given group number; and SnapshotNr - the snapshot number of the halo catalogue in which the halo is identified.
+            
+            Returns Redshift, Subhalo Mass, Parent Group Mass (200 times critical), Parent ID at SnapNum, Subhalo ID at SnapNum
+        """
+        # Find members of SubhaloNr whose SnapNum is SnapshotNr, and the one that corresponds
+        # to MainSubhaloID. Use this to identify the TreeID.
+        itree=self.TreeHalosID[np.where(self.SnapNum==SnapshotNr)[0]][np.where(self.SubhaloNr[np.where(self.SnapNum==SnapshotNr)[0]]==MainSubhaloID)[0]][0]
+        # Find members of SubhaloNr whose SnapNum is SnapshotNr, and the one that corresponds
+        # to MainSubhaloID. Use this to identify the TreeIndex within the TreeID.
+        index=self.TreeHalosIndex[np.where(self.SnapNum==SnapshotNr)[0]][np.where(self.SubhaloNr[np.where(self.SnapNum==SnapshotNr)[0]]==MainSubhaloID)[0]][0]
+        # Given the TreeID, we can identify within the catalogue the offsets of the beginning and
+        # end of the tree associated with TreeID
+        istart=self.TreeOffset[itree]
+        ifinish=self.TreeOffset[itree]+self.TreeLength[itree]
+        
+        # Now extract useful properties of the group and subhalo structures within tree TreeID
+        grp_num=self.GrpNr[istart:ifinish]       # Group Number in catalogue at Snapshort Number
+        grp_mass=self.GrpM200[istart:ifinish]    # Group M200 in catalogue at Snapshot Number
+        sub_num=self.SubhaloNr[istart:ifinish]   # Subhalo Number in catalogue at Snapshot Number
+        sub_mass=self.SubhaloMass[istart:ifinish]  # Subhalo Mass in catalogue at Snapshot Number
+        snap_num=self.SnapNum[istart:ifinish]    # Snapshot Number
+        first_prog=self.TreeMainProgenitor[istart:ifinish]  # First progenitor
+        # Create arrays to contain the variables to be returned
         redshift=np.array([])
-        mass=np.array([])        
-        index=HaloID
-        while self.TreeMainProgenitor[index] != -1:
-            redshift=np.append(redshift,self.Redshift[self.SnapNum[index]])
-            mass=np.append(mass,self.SubhaloMass[self.TreeMainProgenitor[index]])
-            index=self.TreeMainProgenitor[index]
-        return redshift,mass
+        mass=np.array([])
+        m200=np.array([])
+        subhalo_number=np.array([],dtype=np.uint64)
+        group_number=np.array([],dtype=np.uint64)
+
+        # Initial index is already determined at SnapNum SnapShotNr
+        idx=index
+        tree_length=0
+        
+        while first_prog[idx]!=-1:     # Loop over list until we hit the root
+            redshift=np.append(redshift,self.Redshift[snap_num[idx]]) # Redshift
+            mass=np.append(mass,sub_mass[idx])                        # Mass of main subhalo
+            m200=np.append(m200,grp_mass[idx])                        # Mass of parent group, M200
+            group_number=np.append(group_number,grp_num[idx])         # Unique ID of group at SnapNum
+            subhalo_number=np.append(subhalo_number,sub_num[idx])     # Unique ID of subhalo at SnapNum
+            tree_length+=1
+            idx=first_prog[idx]
+
+        zform=0.0
+        
+        if tree_length>10:
+            zform=np.interp(0.5,np.flip(mass/mass[0]),np.flip(redshift))
+        
+        return redshift,mass,m200,group_number,subhalo_number,zform
             
     
     def TrackHaloDescendant(self,HaloID):

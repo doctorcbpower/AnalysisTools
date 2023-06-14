@@ -35,12 +35,12 @@ class HaloTools:
                 # # Read Subhalo Properties
                 SubhaloRankInGr=f['Subhalo/SubhaloRankInGr'][()]  # 0 is a field halo
                 
-                self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubhaloLen=f['Subhalo/SubhaloLen'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubPos=f['Subhalo/SubhaloPos'][()][np.where(SubhaloRankInGr!=0)[0]]
-                self.SubVel=f['Subhalo/SubhaloVel'][()][np.where(SubhaloRankInGr!=0)[0]]                
-                self.SubMass=f['Subhalo/SubhaloMass'][()][np.where(SubhaloRankInGr!=0)[0]]
+                self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                self.SubhaloLen=f['Subhalo/SubhaloLen'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                self.SubPos=f['Subhalo/SubhaloPos'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                self.SubVel=f['Subhalo/SubhaloVel'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                self.SubMass=f['Subhalo/SubhaloMass'][()]#[np.where(SubhaloRankInGr!=0)[0]]
 
         elif self.halocatfileformat=='SubFind-EAGLE':
             filename=self.halocatfilename+'.hdf5'
