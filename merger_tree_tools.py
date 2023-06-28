@@ -82,7 +82,7 @@ class TreeTools:
                 # IDs
                 self.TreeLength=f['TreeTable/Length'][()]
                 self.TreeOffset=f['TreeTable/StartOffset'][()]
-                self.TreeID=f['TreeTable/TreeID'][()]          
+                self.TreeID=f['TreeTable/TreeID'][()]
         elif self.treefileformat=='TreeFrog':
             with h5py.File(self.treefilename,'r') as f:
                 

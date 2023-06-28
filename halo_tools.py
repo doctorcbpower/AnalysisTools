@@ -12,10 +12,11 @@ import numpy as np
 import os
 
 class HaloTools:
-    def __init__(self,halocatfilename,halocatfileformat,comoving_units=True,**kwargs):
+    def __init__(self,halocatfilename,halocatfileformat,comoving_units=False,hubble_correction=False,**kwargs):
         self.halocatfilename=halocatfilename
         self.halocatfileformat=halocatfileformat
-        self.comoving_units=comoving_units                
+        self.comoving_units=comoving_units
+        self.hubble_correction=hubble_correction
 
     def ReadHaloCatalogue(self):
         if self.halocatfileformat=='SubFind':
@@ -131,7 +132,8 @@ class HaloTools:
         elif self.halocatfileformat=='VELOCIraptor':
            ## Get halo properties
            filename=self.halocatfilename+'.properties'
-           if os.path.exists(filename==False):
+           print(filename)
+           if os.path.exists(filename)==False:
                filename+='.0'
                
            with h5py.File(filename,'r') as f:               
@@ -139,6 +141,7 @@ class HaloTools:
                Structuretype=f['Structuretype'][()]  # 10 is a field halo
                HubbleParam=np.float32(f['SimulationInfo'].attrs['h_val'])
                ScaleFactor=np.float32(f['SimulationInfo'].attrs['ScaleFactor'])
+               print('Simulation scale factor: %lf'%ScaleFactor)
                self.GroupAscale=ScaleFactor*np.ones(len(np.where(Structuretype==10)[0]))
                self.GroupNsubs=f['numSubStruct'][()][np.where(Structuretype==10)[0]]
                self.GroupMass=f['Mass_tot'][()][np.where(Structuretype==10)[0]]               
@@ -147,14 +150,12 @@ class HaloTools:
                self.GroupM200=f['Mass_200crit'][()][np.where(Structuretype==10)[0]]
                self.GroupR200=f['R_200crit'][()][np.where(Structuretype==10)[0]]
                self.GroupLen=f['npart'][()][np.where(Structuretype==10)[0]]
+
                if self.comoving_units==True:
-                   self.GroupPos*=HubbleParam
-                   self.GroupPos/=ScaleFactor
-                   self.GroupR200*=HubbleParam
-                   self.GroupR200/=ScaleFactor
-                   self.GroupM200*=HubbleParam
-                   self.GroupMass*=HubbleParam
-                   
+                    print("Rescaling by scale factor")
+                    self.GroupPos/=ScaleFactor
+                    self.GroupR200/=ScaleFactor
+  
                # # Read Subhalo Properties
                HostID=f['hostHaloID'][()]  # -1 is a field halo
                HostIDOffset=np.min(HostID[np.where(HostID!=-1)[0]])
@@ -165,6 +166,14 @@ class HaloTools:
                self.SubMass=f['Mass_tot'][()][np.where(Structuretype!=10)[0]]               
                self.SubhaloLen=f['npart'][()][np.where(Structuretype!=10)[0]]               
                if self.comoving_units==True:
-                   self.SubPos*=HubbleParam
                    self.SubPos/=ScaleFactor
                    self.SubMass*=HubbleParam
+
+        if self.hubble_correction==True:
+            print("Rescaling by Hubble Parameter")
+            self.GroupPos*=HubbleParam
+            self.SubPos*=HubbleParam
+            self.GroupMass*=HubbleParam
+            self.SubMass*=HubbleParam
+            self.GroupR200*=HubbleParam
+            self.GroupM200*=HubbleParam

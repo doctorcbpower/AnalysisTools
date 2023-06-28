@@ -55,27 +55,30 @@ class SnapshotTools:
             print('Reading data from %s'%filename)
             
             with h5py.File(filename,'r') as f:
-                self.ScaleFactor=f['Header'].attrs['Time']
                 NumFiles=f['Header'].attrs['NumFilesPerSnapshot']
                 self.NumPart_Total=f['Header'].attrs['NumPart_Total'][()]
                 self.NumPartType=np.shape(self.NumPart_Total)[0]
                 if self.convention=='SWIFT':
-                    self.BoxSize=f['Header'].attrs['BoxSize'][()][0]
+                    self.ScaleFactor=f['Header'].attrs['Scale-factor']
+                    self.BoxSize=f['Header'].attrs['BoxSize']#[()][0]
                     self.OmegaDM=f['Cosmology'].attrs['Omega_cdm']
                     self.OmegaBar=f['Cosmology'].attrs['Omega_b']
                     self.Omega0=self.OmegaDM+self.OmegaBar
                     self.OmegaLambda=f['Cosmology'].attrs['Omega_lambda']
                     self.HubbleParam=f['Cosmology'].attrs['h']
                 elif self.convention=='GADGET4':
+                    self.ScaleFactor=f['Header'].attrs['Time']
                     self.BoxSize=f['Header'].attrs['BoxSize']
                     self.Omega0=f['Parameters'].attrs['Omega0']
                     self.OmegaLambda=f['Parameters'].attrs['OmegaLambda']
                     self.HubbleParam=f['Parameters'].attrs['HubbleParam']
                 else:
+                    self.ScaleFactor=f['Header'].attrs['Time']
                     self.BoxSize=f['Header'].attrs['BoxSize']
                     self.Omega0=f['Header'].attrs['Omega0']
                     self.OmegaLambda=f['Header'].attrs['OmegaLambda']
                     self.HubbleParam=f['Header'].attrs['HubbleParam']
+                print('Simulation scale factor: %lf'%self.ScaleFactor)
                 if NumFiles>1:
                     print('Data is split across %d files'%NumFiles)
                 
