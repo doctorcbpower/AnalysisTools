@@ -99,6 +99,7 @@ class TreeTools:
                 self.TreeProgenitor={}
                 self.TreeProgenitorSnap={}
                 self.TreeHalosID={}
+                self.Time={}
                 self.SnapNum={}
                 self.GrpM200={}
                 self.SubhaloMass={}
@@ -112,6 +113,7 @@ class TreeTools:
                 for group in f.keys():                            
                     if 'Snap' in group and f[group].attrs['NHalos']>0:
                         ScaleFactor=f[group].attrs['scalefactor']
+                        self.Time[group]=ScaleFactor
                         Current_ID_Offset=f[group].attrs['Snapnum']*ID_Offset+1
                         self.TreeProgenitor[group]=f[group]['Progenitor'][()]                        
                         self.TreeProgenitorSnap[group]=f[group]['ProgenitorSnap'][()]
