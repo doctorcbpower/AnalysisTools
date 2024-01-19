@@ -20,7 +20,7 @@ class SnapshotTools:
             snapfilename - path of the snapshot
             snapfileformat - format of the snapshot; can be 1 or 2 (binary)
             or 3 (HDF5), or 'SNAP1/SNAP2' (binary) of 'HDF5'
-            convention - 'SWIFT', 'GADGET4', otherwise assumes 'GADGET2/3'
+            convention - 'SWIFT', 'GADGET4', 'AREPO', otherwise assumes 'GADGET2/3'
         
         If the file is in HDF5 formay, omit the .hdf5 suffix.
     '''
@@ -31,8 +31,12 @@ class SnapshotTools:
         self.dm_type=dm_type
         self.star_type=star_type
         self.bh_type=bh_type
+        self.convention='GADGET'
+        self.positions_only=False
         if self.snapfileformat=='HDF5' or self.snapfileformat=='3':
             self.convention=kwargs.get('convention')
+        if kwargs.get('positions_only'):
+            self.positions_only=kwargs.get('positions_only')
         
     def ReadSnapshot(self):
         '''
@@ -48,7 +52,7 @@ class SnapshotTools:
             print('Reading data from %s'%filename)
             
             with h5py.File(filename,'r') as f:
-                NumFiles=f['Header'].attrs['NumFilesPerSnapshot']
+                self.NumFiles=f['Header'].attrs['NumFilesPerSnapshot']
                 NameOfMassBlock='Mass'
                 if 'Masses' in list(f['PartType1'].keys()):
                     NameOfMassBlock='Masses'
@@ -78,8 +82,8 @@ class SnapshotTools:
                     self.HubbleParam=f['Header'].attrs['HubbleParam']
                     self.MassTable=f['Header'].attrs['MassTable'][()]
                 print('Simulation scale factor: %lf'%self.ScaleFactor)
-                if NumFiles>1:
-                    print('Data is split across %d files'%NumFiles)
+                if self.NumFiles>1:
+                    print('Data is split across %d files'%self.NumFiles)
                 
             NumPart=np.sum(self.NumPart_Total)
             print('Number of particles: %010d'%NumPart)
@@ -90,11 +94,12 @@ class SnapshotTools:
                 print('Number of particles in mass block: %010d'%NumPart_InMassBlock)
 
             self.pos=np.ndarray(shape=(NumPart,3))
-            self.vel=np.ndarray(shape=(NumPart,3))
-            self.pids=np.ndarray(shape=(NumPart),dtype=np.uint64)
-            self.mass=np.ndarray(shape=(NumPart))
+            if self.positions_only==False:
+                self.vel=np.ndarray(shape=(NumPart,3))
+                self.pids=np.ndarray(shape=(NumPart),dtype=np.uint32)
+                self.mass=np.ndarray(shape=(NumPart))
             
-            if self.NumPart_Total[0]>0:
+            if self.NumPart_Total[0]>0 and self.positions_only==False:
                 self.u=np.ndarray(shape=(self.NumPart_Total[0]))
                 self.rho=np.ndarray(shape=(self.NumPart_Total[0]))
                 
@@ -107,8 +112,8 @@ class SnapshotTools:
                     istart[i]=offset
             ifinish=np.copy(istart)
             
-            if NumFiles>1:
-                for i in range(NumFiles):
+            if self.NumFiles>1:
+                for i in range(self.NumFiles):
                     filename=self.snapfilename+'.%d.hdf5'%i
                     print('Reading in file %s...'%filename)
                     with h5py.File(filename,'r') as f:
@@ -117,6 +122,8 @@ class SnapshotTools:
                             if NumPart_ThisFile[itype]>0:
                                 ifinish[itype]=istart[itype]+NumPart_ThisFile[itype]
                                 self.pos[istart[itype]:ifinish[itype]]=f['PartType%d/Coordinates'%itype][()]
+                                if self.positions_only==True:
+                                    continue
                                 self.vel[istart[itype]:ifinish[itype]]=f['PartType%d/Velocities'%itype][()]
                                 self.pids[istart[itype]:ifinish[itype]]=f['PartType%d/ParticleIDs'%itype][()]
                                 if self.MassTable[itype]==0:
@@ -141,6 +148,9 @@ class SnapshotTools:
                         if self.NumPart_Total[itype]>0:
                             ifinish[itype]=istart[itype]+self.NumPart_Total[itype]
                             self.pos[istart[itype]:ifinish[itype]]=f['PartType%d/Coordinates'%itype][()]
+                            if self.positions_only==True:
+                                continue
+
                             self.vel[istart[itype]:ifinish[itype]]=f['PartType%d/Velocities'%itype][()]
                             self.pids[istart[itype]:ifinish[itype]]=f['PartType%d/ParticleIDs'%itype][()]
                             if self.MassTable[itype]==0:
@@ -196,7 +206,7 @@ class SnapshotTools:
     
                 offset+=28
                 f.seek(offset,os.SEEK_SET)
-                NumFiles=np.fromfile(f,dtype=np.int32,count=1)[0]
+                self.NumFiles=np.fromfile(f,dtype=np.int32,count=1)[0]
 
                 offset+=4
                 f.seek(offset,os.SEEK_SET)
@@ -214,8 +224,8 @@ class SnapshotTools:
                 f.seek(offset,os.SEEK_SET)
                 self.HubbleParam=np.fromfile(f,dtype=np.float64,count=1)[0]
 
-                if NumFiles>1:
-                    print('Data is split across %d files'%NumFiles)
+                if self.NumFiles>1:
+                    print('Data is split across %d files'%self.NumFiles)
             f.close()
 
             idx_with_mass=np.where(self.MassTable==0)[0]    # Want to know which species are in the mass block, so
@@ -227,7 +237,7 @@ class SnapshotTools:
             
             self.pos=np.ndarray(shape=(NumPart,3))
             self.vel=np.ndarray(shape=(NumPart,3))
-            self.pids=np.ndarray(shape=(NumPart),dtype=np.uint64)
+            self.pids=np.ndarray(shape=(NumPart),dtype=np.uint32)
             self.mass=np.ndarray(shape=(NumPart))
             
             if self.NumPart_Total[0]>0:
@@ -243,7 +253,7 @@ class SnapshotTools:
                     istart[i]=offset
             ifinish=np.copy(istart)
 
-            for ifile in range(NumFiles):
+            for ifile in range(self.NumFiles):
                 if ifile>0:
                     filename=fileroot+'.%d'%ifile
                 with open(filename,'rb') as f:
@@ -258,7 +268,7 @@ class SnapshotTools:
 
                     NumPart_InMassBlock_InFile=np.sum(NumPartInThisFile[idx_with_mass])
                     
-                    if NumFiles>1:
+                    if self.NumFiles>1:
                         print('Reading %010d particles from %s'%(NumPartInFile,filename))
                         print('Number of particles in mass block: %010d'%NumPart_InMassBlock_InFile)
 
@@ -299,10 +309,10 @@ class SnapshotTools:
 
                     f.seek(offset,os.SEEK_SET)
 
-                    pids_block=np.fromfile(f,dtype=np.uint64,count=NumPartInFile)
+                    pids_block=np.fromfile(f,dtype=np.uint32,count=NumPartInFile)
                     
                    # Increment beyond the IDs block
-                    offset+=NumPartInFile*4
+                    offset+=NumPartInFile*8
                     offset+=4   # 2nd 4 byte buffer
 
                     # Open the mass block
@@ -369,14 +379,15 @@ class SnapshotTools:
                             if np.isin(itype,idx_with_mass)==True:
                                 cfinish=cstart+NumPartInThisFile[itype]
                                 self.mass[istart[itype]:ifinish[itype]]=mass_block[cstart:cfinish]
+                                cstart=cfinish
                             else:
                                 self.mass[istart[itype]:ifinish[itype]]=self.MassTable[itype]*np.ones(NumPartInThisFile[itype])
 
-                            self.u[istart[itype]:ifinish[itype]]=u_block[bstart:bfinish]
-                            self.rho[istart[itype]:ifinish[itype]]=rho_block[bstart:bfinish]
+                            if self.NumPart_Total[0]>0:
+                                self.u[istart[itype]:ifinish[itype]]=u_block[bstart:bfinish]
+                                self.rho[istart[itype]:ifinish[itype]]=rho_block[bstart:bfinish]
                             astart=afinish
                             bstart=bfinish
-                            cstart=cfinish
 #                            SingleOffsetFinish[itype]=SingleOffsetStart[itype]+self.NumPart_ThisFile[itype]
 #                            TripleOffsetFinish[itype]=TripleOffsetStart[itype]+3*self.NumPart_ThisFile[itype]
 #                            self.pos[istart[itype]:ifinish[itype]]=pos_block[TripleOffsetStart[itype]:TripleOffsetFinish[itype]].reshape(self.NumPart_ThisFile[itype],3)
@@ -506,7 +517,63 @@ class SnapshotTools:
                 self.pos/=self.HubbleParam
                 self.mass/=self.HubbleParam
                 self.BoxSize/=self.HubbleParam
-                
+
+    def WriteSnapshot(self):
+        '''
+        Write data to a single snapshot.
+        '''
+        filename=self.snapfilename+'.hdf5'
+        print('Writing data to %s'%filename)
+
+        with h5py.File(filename,'w') as f:
+            header=f.create_group('Header')
+            header.attrs['NumFilesPerSnapshot']=self.NumFiles
+            header.attrs['NumPart_Total']=self.NumPart_Total
+            header.attrs['NumPart_Total_HighWord']=np.zeros(6,dtype=np.int32)
+            header.attrs['Flag_Entropy_ICs']=int(1)
+            header.attrs['MassTable']=self.MassTable
+            if self.convention=='SWIFT':
+                cosmo=f.create_group('Cosmology')
+                header.attrs['Scale-factor']=self.ScaleFactor
+                header.attrs['BoxSize']=self.BoxSize*np.ones(3)
+                header.attrs['MassTable']=self.MassTable
+                header.attrs['Dimension']=3
+                cosmo.attrs['Omega_cdm']=self.OmegaDM
+                cosmo.attrs['Omega_b']=self.OmegaBar
+                cosmo.attrs['Omega_lambda']=self.OmegaLambda
+                cosmo.attrs['h']=self.HubbleParam
+            elif self.convention=='GADGET4':
+                params=f.create_group('Parameters')
+                header.attrs['Time']=self.ScaleFactor
+                header.attrs['BoxSize']=self.BoxSize
+                params.attrs['Omega0']=self.Omega0
+                params.attrs['OmegaLambda']=self.OmegaLambda
+                params.attrs['HubbleParam']=self.HubbleParam
+            else:
+                header.attrs['Time']=self.ScaleFactor
+                header.attrs['BoxSize']=self.BoxSize
+                header.attrs['Omega0']=self.Omega0
+                header.attrs['OmegaLambda']=self.OmegaLambda
+                header.attrs['HubbleParam']=self.HubbleParam
+
+            NumPart=np.sum(self.NumPart_Total)
+            print('Number of particles: %010d'%NumPart)
+            print('Number of particle types: %d'%self.NumPartType)
+            idx_with_mass=np.where(self.MassTable>0)[0]
+            NumPart_InMassBlock=np.sum(self.NumPart_Total[idx_with_mass])
+            if NumPart_InMassBlock>0:
+                print('Number of particles in mass block: %010d'%NumPart_InMassBlock)
+            
+            for i in range(self.NumPartType):
+                if self.NumPart_Total[i]>0:
+                    group=f.create_group('PartType%d'%i)
+                    data_pos=group.create_dataset('Coordinates',data=self.pos)
+                    data_vel=group.create_dataset('Velocities',data=self.vel)
+                    data_pids=group.create_dataset('ParticleIDs',data=self.pids)
+                    data_mass=group.create_dataset('Masses',data=self.mass)
+                    if i==0:
+                        data_u=group.create_dataset('InternalEnergy',data=self.u)
+
 def select_particles(val,valoffset,size,geometry,**kwargs):
     dval=val-valoffset
     # First check for periodicity
@@ -527,5 +594,7 @@ def select_particles(val,valoffset,size,geometry,**kwargs):
         print('Undefined geometry')
         ipick=None
     return ipick
-
+    
+def place_points_in_mesh(pos,pos_offset,size,mesh_dimension,**kwargs):
+    return np.fix(mesh_dimension*(pos-pos_offset)/size)
     
