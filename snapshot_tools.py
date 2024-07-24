@@ -13,6 +13,11 @@ import numpy as np
 import os
 import struct
 
+SOLAR_MASS_IN_CGS=1.989e33
+YEAR_IN_CGS=60*60*24*365
+KPC_IN_CGS=3.0856e21
+KM_PER_SEC_IN_CGS=1.e5
+
 class SnapshotTools:
     '''
     Read simulation snapshots - can be in HDF5 or GADGET binary format.
@@ -41,11 +46,9 @@ class SnapshotTools:
         self.pids_type=32
 
         # Definition of units in CGS
-        SOLAR_MASS_IN_CGS=1.989e33
-        YEAR_IN_CGS=60*60*24*365
-        self.unit_length_in_cgs=3.0856e21  # kpc
-        self.unit_mass_in_cgs=1.989e43  # 1e10 Msol
-        self.unit_velocity_in_cgs=1.0e5  # km/s
+        self.unit_length_in_cgs=KPC_IN_CGS  # kpc
+        self.unit_mass_in_cgs=1e10*SOLAR_MASS_IN_CGS # 1e10 Msol
+        self.unit_velocity_in_cgs=KM_PER_SEC_IN_CGS # km/s
         self.unit_time_in_cgs=self.unit_length_in_cgs/self.unit_velocity_in_cgs
         self.unit_density_in_cgs=self.unit_mass_in_cgs/self.unit_length_in_cgs**3
         self.unit_sfr_in_cgs=SOLAR_MASS_IN_CGS/YEAR_IN_CGS
@@ -648,6 +651,9 @@ class SnapshotTools:
         if self.snapfileformat=='HDF5' or self.snapfileformat=='3':
             print('HELLO')
         else:
+            if self.snapfileformat!='SNAP2':
+                return
+                
             filename=fileroot
             
             if os.path.exists(filename)==False:
@@ -776,13 +782,13 @@ class SnapshotTools:
                 self.mass/=self.HubbleParam
                 self.BoxSize/=self.HubbleParam
 
-    def WriteSnapshot(self,output_file,sim_type,npart_type,masstable_type,idx,idx_type,selection,periodic,**kwargs):
+    def WriteSnapshot(self,output_file,sim_type,npart_type,masstable_type,idx,idx_type,**kwargs):
         '''
         Write data to a single snapshot.
         '''
         filename=output_file+'.hdf5'
         print('Writing data to %s'%filename)
-
+    
         with h5py.File(filename,'w') as f:
             header=f.create_group('Header')
             header.attrs['NumFilesPerSnapshot']=self.NumFiles
@@ -823,14 +829,17 @@ class SnapshotTools:
                 header.attrs['Flag_Feedback']=int(0)                
                 header.attrs['Flag_DoublePrecision']=int(0)
 
-            header.attrs['Halo Centre']=selection[0:3]
-            header.attrs['Halo Systemic Velocity']=selection[4:6]
-            header.attrs['Halo Extent']=selection[6]
+            if kwargs.get('selection')!=None:
+                header.attrs['Halo Centre']=kwargs.get('selection')[0:3]
+                header.attrs['Halo Systemic Velocity']=kwargs.get('selection')[4:6]
+                header.attrs['Halo Extent']=kwargs.get('selection')[6]
+            
             header.attrs['RunLabel']=sim_type
-            if periodic==True:
-                iperiodic=1
-            else:
-                iperiodic=0
+
+            iperiodic=1
+            if kwargs.get('periodic')!=None:
+                if kwargs.get('periodic')==False:
+                    iperiodic=0
             header.attrs['Periodic']=iperiodic
 
             NameOfMassBlock='Masses'
