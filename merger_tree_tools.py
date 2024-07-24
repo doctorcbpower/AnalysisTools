@@ -217,32 +217,46 @@ class TreeTools:
             grp_mass=self.GrpM200[istart:ifinish]    # Group M200 in catalogue at Snapshot Number
             sub_num=self.SubhaloNr[istart:ifinish]   # Subhalo Number in catalogue at Snapshot Number
             sub_mass=self.SubhaloMass[istart:ifinish]  # Subhalo Mass in catalogue at Snapshot Number
-            snap_num=self.SnapNum[istart:ifinish]    # Snapshot Number
+            sub_pos=self.SubhaloPos[istart:ifinish]  # Subhalo Position in catalogue at Snapshot Number
+            sub_vel=self.SubhaloVel[istart:ifinish]  # Subhalo Velocity in catalogue at Snapshot Number
+            snap_num=self.SnapNum[istart:ifinish]   # Snapshot number
             first_prog=self.TreeMainProgenitor[istart:ifinish]  # First progenitor
             # Create arrays to contain the variables to be returned
-            redshift=np.array([])
-            mass=np.array([])
-            m200=np.array([])
-            subhalo_number=np.array([],dtype=np.uint64)
-            group_number=np.array([],dtype=np.uint64)
+            redshift=[]
+            mass=[]
+            m200=[]
+            subhalo_pos=[]
+            subhalo_vel=[]
+            snapshot_number=[]
+            subhalo_number=[]
+            group_number=[]
 
             # Initial index is already determined at SnapNum SnapShotNr
             idx=index
             tree_length=0
         
             while first_prog[idx]!=-1:     # Loop over list until we hit the root
-                redshift=np.append(redshift,self.Redshift[snap_num[idx]]) # Redshift
-                mass=np.append(mass,sub_mass[idx])                        # Mass of main subhalo
-                m200=np.append(m200,grp_mass[idx])                        # Mass of parent group, M200
-                group_number=np.append(group_number,grp_num[idx])         # Unique ID of group at SnapNum
-                subhalo_number=np.append(subhalo_number,sub_num[idx])     # Unique ID of subhalo at SnapNum
+                redshift.append(self.Redshift[snap_num[idx]]) # Redshift
+                mass.append(sub_mass[idx])               # Mass of main subhalo
+                m200.append(grp_mass[idx])               # Mass of parent group, M200
+                subhalo_pos.append(sub_pos[idx])         # Position of subhalo
+                subhalo_vel.append(sub_vel[idx])         # Velocity of subhalo
+                snapshot_number.append(snap_num[idx])    # SnapNum
+                group_number.append(grp_num[idx])        # Unique ID of group at SnapNum
+                subhalo_number.append(sub_num[idx])      # Unique ID of subhalo at SnapNum
                 tree_length+=1
                 idx=first_prog[idx]
 
             zform=0.0
+            alpha=0.0
+            deltam_over_m=0.0
         
             if tree_length>10:
-                zform=np.interp(0.5,np.flip(mass/mass[0]),np.flip(redshift))
+                zform=np.interp(0.5,np.flip(m200/m200[0]),np.flip(redshift))
+                logm_z3=np.interp(3,redshift,np.log(m200/m200[0]))
+                logm_z0pt3=np.interp(0.3,redshift,np.log(m200/m200[0]))
+                alpha=-logm_z3/3
+                deltam_over_m=1.0-np.exp(logm_z0pt3)
         elif self.treefileformat=='TreeFrog':
             """ Assumes the TreeFrog MergerTree structure - this tracks the first progenitor of a given subhalo identified in a halo catalogue at a given snapshot number.
     
@@ -283,10 +297,16 @@ class TreeTools:
                 indx=np.where(self.TreeHalosID['Snap_%03d'%SnapNum]==ProgHaloID)[0]
 
             zform=0.0
+            alpha=0.0
+            deltam_over_m=0.0
         
             if tree_length>10:
                 zform=np.interp(0.5,np.flip(m200/m200[0]),np.flip(redshift))
-                
+                logm_z3=np.interp(3,redshift,np.log(m200/m200[0]))
+                logm_z0pt3=np.interp(0.3,redshift,np.log(m200/m200[0]))
+                alpha=-logm_z3/3
+                deltam_over_m=1.0-np.exp(logm_z0pt3)
+                                
         elif self.treefileformat=='MergerTree':
             """ Assumes the AHF MergerTree structure - this is a pain because the information is split across file.
             """
@@ -305,7 +325,9 @@ class TreeTools:
                 ifinish=istart+self.prog_len[index][0]
                 prog_id=self.prog_ids[istart:ifinish][0]
 
-        return redshift,mass,m200,group_number,subhalo_number,zform
+        return np.array(redshift),np.array(mass),np.array(m200),np.array(subhalo_pos),np.array(subhalo_vel),\
+               np.array(snapshot_number),np.array(group_number),np.array(subhalo_number),\
+               zform,alpha,deltam_over_m
             
     
     def TrackHaloDescendant(self,HaloID):
