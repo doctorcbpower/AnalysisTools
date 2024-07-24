@@ -32,8 +32,7 @@ class ProfileTools:
             
     ''' Load particles in a region defined by the properties of 
         the halo in the halo catalogue. 
-        pos_centre=3D vector defining centre
-        size=3D vector defining lengths along x,y,z directions
+        
         region_type=sphere/cube/FOF - spherical region, cuboidal
         region (with dimensions set by user), FOF only
     '''
@@ -48,6 +47,8 @@ class ProfileTools:
         else:
             delta=particle_data.pos-pos_centre
             if region_type=='cuboid':
+                print(pos_centre)
+                print(size)
                 ikeep=np.logical_and(np.abs(delta[:,0])<=self.fr_cut*size[0],np.abs(delta[:,1])<=self.fr_cut*size[1])
                 ikeep=np.logical_and(ikeep,np.abs(delta[:,2])<=self.fr_cut*size[2])            
             if region_type=='sphere':
@@ -62,35 +63,14 @@ class ProfileTools:
         ibins=np.linspace(self.lrmin,self.lrmax,self.numbins)
         self.ilist=np.digitize(np.log10(self.r),ibins)
         
-#    def select_particles(self,val,valoffset,size,geometry,**kwargs):
-#        dval=val-valoffset
-#        # First check for periodicity
-#        if kwargs.get('periodic')==True and kwargs.get('scale_length')!=None:
-#            scale_length=kwargs.get('scale_length')
-#            dval=np.where(dval>0.5*scale_length,dval-scale_length,dval)
-#            dval=np.where(dval<-0.5*scale_length,dval+scale_length,dval)
-#        else:
-#            print('Ignoring periodicity')
-#        # Impose cut based on desired geometry
-#        if geometry=='cubic':
-#            ipick=np.logical_and(np.abs(dval[:,0])<size,np.abs(dval[:,1])<size)
-#            ipick=np.logical_and(ipick,np.abs(dval[:,2])<size)
-#        elif geometry=='spherical':
-#            r2=dval[:,0]**2+dval[:,1]**2+dval[:,2]**2
-#            ipick=np.where(r2<size*size)[0]
-#        else:
-#            print('Undefined geometry')
-#            ipick=None
-#        return ipick
-#
-    def radial_bins(self,r,rlim,nbins,bintype='log'):
+    def radial_bins(self,r,rmin,rmax,nbins,bintype='log'):
         if bintype=='log':
-            lrmin=np.log10(rlim[0])
-            lrmax=np.log10(rlim[1])
+            lrmin=np.log10(rmin)
+            lrmax=np.log10(rmax)
             lrbins=np.linspace(lrmin,lrmax,nbins)
             rbins=10**lrbins
         else:
-            rbins=np.linspace(rlim[0],rlim[1],nbins)
+            rbins=np.linspace(rmin,rmax,nbins)
         indx=np.digitize(r,bins=rbins,right=False)
 
         return indx,rbins
@@ -127,58 +107,61 @@ class ProfileTools:
         else:
             return rav,rhomed
         
-    def kinematic_radial_profile(self,pos,vel,poscen,velcen,size,lbox,rlim,numbins,bintype='log',**kwargs):
-        ipick=st.select_particles(pos,poscen,size,geometry='spherical',periodic=True,scale_length=lbox)
-        dpos=pos[ipick]-poscen
-        dpos=np.where(dpos>0.5*lbox,dpos-lbox,dpos)
-        dpos=np.where(dpos<-0.5*lbox,dpos+lbox,dpos)
-        r=np.sqrt(dpos[:,0]**2+dpos[:,1]**2+dpos[:,2]**2)
-        dvel=vel[ipick]-velcen
-        
+    def kinematic_radial_profile(self,r,pos,vel,rmin,rmax,nbins,bintype='log',**kwargs):
         if bintype=='log':
-            lrmin=np.log10(rlim[0])
-            lrmax=np.log10(rlim[1])
-            lrbins=np.linspace(lrmin,lrmax,numbins)
+            lrmin=np.log10(rmin)
+            lrmax=np.log10(rmax)
+            lrbins=np.linspace(lrmin,lrmax,nbins)
             rbins=10**lrbins
         else:
-            rbins=np.linspace(rlim[0],rlim[1],numbins)
+            rbins=np.linspace(rmin,rmax,nbins)
         indx=np.digitize(r,bins=rbins,right=False)
 
-        rav=np.zeros(numbins,dtype=np.float64)
-        vrav=np.zeros(numbins,dtype=np.float64)
-        sigmar_av=np.zeros(numbins,dtype=np.float64)
-        sigma_av=np.zeros(numbins,dtype=np.float64)
+        rav=np.zeros(nbins,dtype=np.float64)
+        vrav=np.zeros(nbins,dtype=np.float64)
+        sigmar_av=np.zeros(nbins,dtype=np.float64)
+        sigma_av=np.zeros(nbins,dtype=np.float64)
     
-        for i in range(numbins):
+        for i in range(nbins):
             rav[i]=np.mean(r[indx==i])
-            vr=dpos[:,0][indx==i]*dvel[:,0][indx==i]+dpos[:,1][indx==i]*dvel[:,1][indx==i]+dpos[:,2][indx==i]*dvel[:,2][indx==i]
+            vr=pos[:,0][indx==i]*vel[:,0][indx==i]+pos[:,1][indx==i]*vel[:,1][indx==i]+pos[:,2][indx==i]*vel[:,2][indx==i]
             vr=vr/r[indx==i]
             vr2=vr*vr
             vrav[i]=np.mean(vr)
             vr2av=np.mean(vr*vr)
             sigmar_av[i]=np.sqrt(vr2av-vrav[i]**2)
-            vxav=np.mean(dvel[:,0][indx==i])
-            vyav=np.mean(dvel[:,1][indx==i])
-            vzav=np.mean(dvel[:,2][indx==i])
-            vx2av=np.mean(dvel[:,0][indx==i]**2)
-            vy2av=np.mean(dvel[:,1][indx==i]**2)
-            vz2av=np.mean(dvel[:,2][indx==i]**2)
+            vxav=np.mean(vel[:,0][indx==i])
+            vyav=np.mean(vel[:,1][indx==i])
+            vzav=np.mean(vel[:,2][indx==i])
+            vx2av=np.mean(vel[:,0][indx==i]**2)
+            vy2av=np.mean(vel[:,1][indx==i]**2)
+            vz2av=np.mean(vel[:,2][indx==i]**2)
             sigma_av[i]=np.sqrt((vx2av-vxav*vxav)+(vy2av-vyav*vyav)+(vz2av-vzav*vzav))
         return rav,vrav,sigmar_av,sigma_av
 
-# rmed_mr=np.array([])
-# umed_mr=np.array([])
-# rhomed_mr=np.array([])
-# rhoshell_mr=np.array([])
+class MassFunctionTools:
+    def __init__(self,**kwargs):
+        self.comoving_units=True
+        # Use comoving or physical units when plotting?
+        if 'comoving_units' in kwargs:
+            self.comoving_units=kwargs.get('comoving_units')
+        self.numbins=25
+        # Number of bins to plot
+        if 'numbins' in kwargs:
+            self.numbins=kwargs.get('numbins')
+        self.halo_id=0
 
-# for i in range(numbins):
-#     if np.any(ilist==i)==True:
-#         rmin=np.min(r[ilist==i])
-#         rmax=np.max(r[ilist==i])
-#         rmed_mr=np.append(rmed_mr,np.median(r[ilist==i]))
-#         umed_mr=np.append(umed_mr,np.median(gu[ikeep][ilist==i]))
-#         rhomed_mr=np.append(rhomed_mr,np.median(grho[ikeep][ilist==i]))
-#         rhoshell_mr=np.append(rhoshell_mr,3*np.sum(gmass[ikeep][ilist==i])/4./np.pi/(rmax**3-rmin**3))
+    def BinByHaloMass(self,halo_mass,lbox,delta_logmass=0.,numbins=10):
+        dlm=delta_logmass
+        if dlm>0:
+            numbins=np.int((np.max(np.log10(halo_mass))-np.min(np.log10(halo_mass)))/dlm)
+        else:
+            dlm=((np.max(np.log10(halo_mass)-np.min(np.log10(halo_mass))/numbins)))
+        print("Binning data with %d bins..."%numbins)
+        (num,lmbins)=np.histogram(np.log10(halo_mass)+10,bins=numbins)
+        lm=np.array([])
+        for i in range(len(lmbins)-1):
+            lm=np.append(lm,0.5*(lmbins[i]+lmbins[i+1]))
+        ldndlm=np.log10(num/lbox**3/dlm)
+        return lm,ldndlm
 
-        
-        
