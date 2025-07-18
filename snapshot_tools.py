@@ -17,6 +17,10 @@ SOLAR_MASS_IN_CGS=1.989e33
 YEAR_IN_CGS=60*60*24*365
 KPC_IN_CGS=3.0856e21
 KM_PER_SEC_IN_CGS=1.e5
+<<<<<<< HEAD
+=======
+RHOCRIT0=27.755
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
 class SnapshotTools:
     '''
@@ -44,6 +48,10 @@ class SnapshotTools:
         self.extra_blocks=[]
         self.positions_type='float32'
         self.pids_type=32
+<<<<<<< HEAD
+=======
+        self.not_hires_ptypes=[2,3,7]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
         # Definition of units in CGS
         self.unit_length_in_cgs=KPC_IN_CGS  # kpc
@@ -123,9 +131,16 @@ class SnapshotTools:
                 if self.NumFiles>1:
                     print('Data is split across %d files'%self.NumFiles)
                 self.ispotential=False
+<<<<<<< HEAD
                 if 'Potential' in f['PartType1'].keys():
                     self.ispotential=True
    
+=======
+                if 'PartType1' in list(f.keys()):
+                    if 'Potential' in f['PartType1'].keys():
+                        self.ispotential=True
+
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
             NumPart=np.sum(self.NumPart_Total)
             print('Number of particles: %010d'%NumPart)
             print('Number of particle types: %d'%self.NumPartType)
@@ -135,10 +150,21 @@ class SnapshotTools:
                 print('Number of particles in mass block: %010d'%NumPart_InMassBlock)
                 
             if self.hires_only==True:
+<<<<<<< HEAD
                 NumPart=np.sum(self.NumPart_Total[:2])
                 print('Number of HIRES particles: %010d'%NumPart)
 
             self.pos=np.ndarray(shape=(NumPart,3))
+=======
+                NumPart=self.NumPart_Total[self.gas_type]+self.NumPart_Total[self.dm_type]+self.NumPart_Total[self.star_type]+self.NumPart_Total[self.bh_type]
+                print('Number of HIRES particles: %010d'%NumPart)
+
+            if self.positions_type=='float64':
+                self.pos=np.ndarray(shape=(NumPart,3),dtype=np.float64)
+            else:
+                self.pos=np.ndarray(shape=(NumPart,3),dtype=np.float32)
+
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
             if self.positions_only==False:
                 self.vel=np.ndarray(shape=(NumPart,3))
                 if self.pids_type==32:
@@ -150,7 +176,12 @@ class SnapshotTools:
             if self.NumPart_Total[0]>0 and self.positions_only==False:
                 self.u=np.ndarray(shape=(self.NumPart_Total[0]))
                 self.rho=np.ndarray(shape=(self.NumPart_Total[0]))
+<<<<<<< HEAD
                 self.smoothinglength=np.ndarray(shape=(self.NumPart_Total[0]))
+=======
+                if self.convention!='Arepo':
+                    self.smoothinglength=np.ndarray(shape=(self.NumPart_Total[0]))
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
             if self.get_ptypes==True:
                 self.ptype=np.ones(shape=(NumPart),dtype=np.int32)
@@ -159,6 +190,12 @@ class SnapshotTools:
                 for i in range(self.NumPartType):
                     self.ptype[ioffset[i]:ioffset[i+1]]=self.ptype[ioffset[i]:ioffset[i+1]]*i
                 
+<<<<<<< HEAD
+=======
+            if self.ispotential==True:
+                self.potential=np.ndarray(shape=(NumPart))
+            
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
             isstellarage=False
             ismetallicity=False
             issfr=False
@@ -191,15 +228,24 @@ class SnapshotTools:
             istart=np.zeros(self.NumPartType,dtype=np.uint64)
             offset=0
             
-            for i in range(1,self.NumPartType):
-                offset+=self.NumPart_Total[i-1]
+            for i in range(self.NumPartType):
+#                if i in self.not_hires_ptypes:
+#                    continue
                 if self.NumPart_Total[i]>0:
                     istart[i]=offset
+                offset+=self.NumPart_Total[i]
+#            istart=np.cumsum(self.NumPart_Total)
             ifinish=np.copy(istart)
-            
+            print('istart:',istart)
             jstart=0
             jfinish=np.copy(jstart)
             
+<<<<<<< HEAD
+            jstart=0
+            jfinish=np.copy(jstart)
+            
+=======
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
             if self.NumFiles>1:
                 for i in range(self.NumFiles):
                     filename=self.snapfilename+'.%d.hdf5'%i
@@ -207,7 +253,12 @@ class SnapshotTools:
                     with h5py.File(filename,'r') as f:
                         NumPart_ThisFile=f['Header'].attrs['NumPart_ThisFile'][()]
                         for itype in range(self.NumPartType):
+<<<<<<< HEAD
                             if self.hires_only==True and itype>1:
+=======
+                            if self.hires_only==True and itype in self.not_hires_ptypes:
+                                print('Skipping Particle Type %d'%itype)
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                                 continue
                             if NumPart_ThisFile[itype]>0:
                                 ifinish[itype]=istart[itype]+NumPart_ThisFile[itype]
@@ -235,7 +286,12 @@ class SnapshotTools:
                                     else:
                                         self.u[istart[itype]:ifinish[itype]]=f['PartType%d/InternalEnergy'%itype][()]
                                         self.rho[istart[itype]:ifinish[itype]]=f['PartType%d/Density'%itype][()]
+<<<<<<< HEAD
                                         self.smoothinglength[istart[itype]:ifinish[itype]]=f['PartType%d/SmoothingLength'%itype][()]
+=======
+                                        if self.convention!='Arepo':
+                                            self.smoothinglength[istart[itype]:ifinish[itype]]=f['PartType%d/SmoothingLength'%itype][()]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
  
                                     if ismetallicity==True:
                                         if f['PartType%d/Metallicity'%itype].ndim>1:
@@ -264,10 +320,19 @@ class SnapshotTools:
             else:
                 with h5py.File(filename,'r') as f:
                     for itype in range(self.NumPartType):
+<<<<<<< HEAD
                         if self.hires_only==True and itype>1:
                             continue
+=======
+                        if self.hires_only==True:
+                            if itype in self.not_hires_ptypes:
+                                print('Skipping Particle Type %d'%itype)
+                                continue
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         if self.NumPart_Total[itype]>0:
                             ifinish[itype]=istart[itype]+self.NumPart_Total[itype]
+                            print(ifinish[itype]-istart[itype],itype,istart[itype],ifinish[itype],self.NumPart_Total[itype])
+
                             self.pos[istart[itype]:ifinish[itype]]=f['PartType%d/Coordinates'%itype][()]
                             if self.positions_only==True:
                                 continue
@@ -294,7 +359,12 @@ class SnapshotTools:
                                 else:
                                     self.u[istart[itype]:ifinish[itype]]=f['PartType%d/InternalEnergy'%itype][()]
                                     self.rho[istart[itype]:ifinish[itype]]=f['PartType%d/Density'%itype][()]
+<<<<<<< HEAD
                                     self.smoothinglength[istart[itype]:ifinish[itype]]=f['PartType%d/SmoothingLength'%itype][()]
+=======
+                                    if self.convention!='Arepo':
+                                        self.smoothinglength[istart[itype]:ifinish[itype]]=f['PartType%d/SmoothingLength'%itype][()]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
                                 if ismetallicity==True:
                                     if f['PartType%d/Metallicity'%itype].ndim>1:
@@ -396,6 +466,7 @@ class SnapshotTools:
             if self.NumPart_Total[0]>0:
                 self.u=np.ndarray(shape=(self.NumPart_Total[0]))
                 self.rho=np.ndarray(shape=(self.NumPart_Total[0]))
+<<<<<<< HEAD
 
             blocknames=self.GetBlockNames()
 
@@ -422,11 +493,34 @@ class SnapshotTools:
 
             istart=np.zeros(self.NumPartType,dtype=np.uint64)
             offset=0
+=======
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
-            for i in range(1,self.NumPartType):
-                offset+=self.NumPart_Total[i-1]
-                if self.NumPart_Total[i]>0:
-                    istart[i]=offset
+            blocknames=self.GetBlockNames()
+
+            isstellarage=False
+            ismetallicity=False
+            issfr=False
+            ispotential=False
+            
+            if len(self.extra_blocks)>0:
+                print('Loading extra blocks: %s'%self.extra_blocks)
+                if 'AGE' in self.extra_blocks:
+                    self.stellarage=np.ndarray(shape=(self.NumPart_Total[self.star_type]))
+                    isstellarage=True
+                if 'Z' in self.extra_blocks:
+                    self.gas_metallicity=np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
+                    self.stellar_metallicity=np.ndarray(shape=(self.NumPart_Total[self.star_type]))
+                    ismetallicity=True
+                if 'SFR' in self.extra_blocks:
+                    self.gas_sfr=np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
+                    issfr=True
+                if 'POT' in self.extra_blocks:
+                    self.potential=np.ndarray(shape=(NumPart))
+                    ispotential=True
+
+            istart=np.zeros(self.NumPartType,dtype=np.uint64)
+            istart[1:]=np.cumsum(self.NumPart_Total[:-1])
             ifinish=np.copy(istart)
 
             for ifile in range(self.NumFiles):
@@ -452,8 +546,9 @@ class SnapshotTools:
 
                     if self.snapfileformat=='SNAP2':
                         offset+=16
-        
+
                     offset+=4    # 1st 4 byte buffer
+                    
                     if self.snapfileformat=='SNAP2':
                         offset+=16
 
@@ -491,25 +586,16 @@ class SnapshotTools:
                     else:
                         pids_block=np.fromfile(f,dtype=np.uint64,count=NumPartInFile)
                         num_bytes=8
+<<<<<<< HEAD
                         
+=======
+
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                    # Increment beyond the IDs block
                     offset+=NumPartInFile*num_bytes
                     offset+=4   # 2nd 4 byte buffer
 
-                    # Open the mass block
-                    offset+=4   # 1st 4 byte buffer
-                    if self.snapfileformat=='SNAP2':
-                        offset+=16
-
-                    f.seek(offset,os.SEEK_SET)
-
-                    mass_block=np.fromfile(f,dtype=np.float32,count=NumPart_InMassBlock_InFile)
-
-                    if NumPartInThisFile[0]>0:
-                        # Increment beyond the mass block
-                        offset+=NumPart_InMassBlock_InFile*4
-                        offset+=4   # 2nd 4 byte buffer
-
+                    if NumPart_InMassBlock_InFile>0:
                         # Open the mass block
                         offset+=4   # 1st 4 byte buffer
                         if self.snapfileformat=='SNAP2':
@@ -517,8 +603,22 @@ class SnapshotTools:
 
                         f.seek(offset,os.SEEK_SET)
 
-                        u_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[0])
+                        mass_block=np.fromfile(f,dtype=np.float32,count=NumPart_InMassBlock_InFile)
 
+                        # Increment beyond the mass block
+                        offset+=NumPart_InMassBlock_InFile*4
+                        offset+=4   # 2nd 4 byte buffer
+
+                    if NumPartInThisFile[0]>0:
+                        # Open the mass block
+                        offset+=4   # 1st 4 byte buffer
+                        if self.snapfileformat=='SNAP2':
+                            offset+=16
+
+                        f.seek(offset,os.SEEK_SET)
+
+                        u_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
+                        
                        # Increment beyond the mass block
                         offset+=NumPartInThisFile[0]*4
                         offset+=4   # 2nd 4 byte buffer
@@ -530,6 +630,7 @@ class SnapshotTools:
 
                         f.seek(offset,os.SEEK_SET)
 
+<<<<<<< HEAD
                         rho_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[0])
                         
                         if ismetallicity==True:
@@ -545,6 +646,23 @@ class SnapshotTools:
                             f.seek(offset,os.SEEK_SET)
                             stellarage_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.star_type])
 
+=======
+                        rho_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
+
+                        if ismetallicity==True:
+                            offset=blocknames['Z']+20
+                            f.seek(offset,os.SEEK_SET)
+                            gas_metals_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
+                            offset+=4*NumPartInThisFile[0]
+                            f.seek(offset,os.SEEK_SET)
+                            stellar_metals_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.star_type])
+                            
+                        if isstellarage==True:
+                            offset=blocknames['AGE']+20
+                            f.seek(offset,os.SEEK_SET)
+                            stellarage_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.star_type])
+
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         if issfr==True:
                             offset=blocknames['SFR']+20
                             f.seek(offset,os.SEEK_SET)
@@ -555,23 +673,16 @@ class SnapshotTools:
                         f.seek(offset,os.SEEK_SET)
                         potential_block=np.fromfile(f,dtype=np.float32,count=NumPartInFile)
 
-#                    # Copy these blocks into pos,vel,pids arrays
-#                    SingleOffsetStart=np.zeros(self.NumPartType,dtype=np.uint64)
-#                    TripleOffsetStart=np.zeros(self.NumPartType,dtype=np.uint64)
-#                    TypeOffset=0
-#                    for i in range(1,self.NumPartType):
-#                        TypeOffset+=self.NumPart_ThisFile[i-1]
-#                        if self.NumPart_ThisFile[i]>0:
-#                            SingleOffsetStart[i]=TypeOffset
-#                            TripleOffsetStart[i]=TypeOffset
-#                    SingleOffsetFinish=np.copy(SingleOffsetStart)
-#                    TripleOffsetFinish=np.copy(TripleOffsetStart)
                     ifinish=istart+NumPartInThisFile.astype(np.uint64)
                     
                     astart=0
                     bstart=0
                     cstart=0
+<<<<<<< HEAD
                     
+=======
+                                        
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                     for itype in range(self.NumPartType):
                         if NumPartInThisFile[itype]>0:
                             afinish=astart+3*NumPartInThisFile[itype]
@@ -589,15 +700,26 @@ class SnapshotTools:
                             if ispotential==True:
                                 self.potential[istart[itype]:ifinish[itype]]=potential_block[bstart:bfinish]
 
+<<<<<<< HEAD
                             if self.NumPart_Total[0]>0:
                                 self.u[istart[itype]:ifinish[itype]]=u_block[bstart:bfinish]
                                 self.rho[istart[itype]:ifinish[itype]]=rho_block[bstart:bfinish]
+=======
+                            if NumPartInThisFile[0]>0:
+                                self.u[istart[itype]:ifinish[itype]]=u_block[bstart:bfinish]
+                                if rho_block.size>0:
+                                    self.rho[istart[itype]:ifinish[itype]]=rho_block[bstart:bfinish]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                                 if ismetallicity==True:
                                     self.gas_metallicity[istart[itype]:ifinish[itype]]=gas_metals_block[bstart:bfinish]
                                 if issfr==True:
                                     self.gas_sfr[istart[itype]:ifinish[itype]]=gas_sfr_block[bstart:bfinish]
 
+<<<<<<< HEAD
                             if self.NumPart_Total[self.star_type]>0:
+=======
+                            if NumPartInThisFile[self.star_type]>0:
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                                 if ismetallicity==True:
                                     self.stellar_metallicity[istart[itype]:ifinish[itype]]=stellar_metals_block[bstart:bfinish]
                                 if isstellarage==True:
@@ -746,6 +868,49 @@ class SnapshotTools:
                                         self.potential[isbh:ifbh])
 
         
+    def AddGasParticles(self,OmegaBar=0.0491,frac_offset=0.25):
+        if self.NumPart_Total[0]>0:
+            print('Error! Gas particles already present.')
+            return
+            
+        self.OmegaBar=0.0491
+        fg=self.OmegaBar/self.Omega0
+        fd=1.-fg
+        
+        mean_interparticle_separation=(self.mass[0]/self.Omega0/RHOCRIT0)**(1./3.)
+        
+        print('Mean interparticle separation: %lf [Lbox]'%(mean_interparticle_separation/self.BoxSize))
+
+        # Revise the numbers of particles in the header
+        self.NumPart_Total[0]=self.NumPart_Total[1]
+        self.NumPart=np.sum(self.NumPart_Total)
+        
+        new_pos=np.ndarray(shape=(np.sum(self.NumPart_Total),3),dtype=np.float32)
+        new_vel=np.ndarray(shape=(np.sum(self.NumPart_Total),3),dtype=np.float32)
+   
+        # First create gas particles
+        new_pos[:self.NumPart_Total[0],:]=(self.pos[:self.NumPart_Total[1]]-fd*frac_offset*mean_interparticle_separation*np.ones(3))
+        new_vel[:self.NumPart_Total[0],:]=self.vel[:self.NumPart_Total[1]]
+        self.u=np.ones(self.NumPart_Total[0])*100
+        self.smoothinglength=np.ones(self.NumPart_Total[0])*mean_interparticle_separation
+
+        # ... then modify dark matter particles
+        new_pos[self.NumPart_Total[0]:self.NumPart_Total[0]+self.NumPart_Total[1],:]=self.pos[:self.NumPart_Total[1]]-frac_offset*mean_interparticle_separation*np.ones(3)
+        new_vel[self.NumPart_Total[0]:self.NumPart_Total[0]+self.NumPart_Total[1],:]=self.vel[:self.NumPart_Total[1]]
+
+        new_pos[self.NumPart_Total[0]+self.NumPart_Total[1]:,:]=self.pos[self.NumPart_Total[1]:]
+        new_vel[self.NumPart_Total[0]+self.NumPart_Total[1]:,:]=self.vel[self.NumPart_Total[1]:]
+
+        self.pos=new_pos
+        self.vel=new_vel
+        
+        self.mass=np.concatenate([self.mass[:self.NumPart_Total[1]],self.mass])
+        mass_mask=np.concatenate([np.ones(self.NumPart_Total[0])*fg,np.ones(self.NumPart_Total[1])*fd])
+        mass_mask=np.concatenate([mass_mask,np.ones(self.NumPart-np.sum(self.NumPart_Total[:2]))])
+        self.mass=self.mass*mass_mask
+    
+        self.pids=np.concatenate([np.arange(self.NumPart_Total[0]),self.pids+self.NumPart_Total[1]])
+
     class ParticleProperties:
         def __init__(self,pos,vel,pids,mass,potential,**kwargs):
             self.pos=pos
@@ -785,25 +950,54 @@ class SnapshotTools:
     def WriteSnapshot(self,output_file,sim_type,npart_type,masstable_type,idx,idx_type,**kwargs):
         '''
         Write data to a single snapshot.
+<<<<<<< HEAD
         '''
         filename=output_file+'.hdf5'
         print('Writing data to %s'%filename)
     
+=======
+        output_file - the snapshot to write to
+        sim_type - choices are SWIFT, GADGET4, or everything else
+        npart_type - number of particles in file by type
+        masstable_type - masses of particles in mass table by type
+        idx - 
+        idx_type -
+        selection - 6 element array containing centre, velocity, and size
+        periodic - boolean
+        ICs - boolean
+        NameOfMassBlock - string
+        '''
+        filename=output_file+'.hdf5'
+        print('Writing data to %s'%filename)
+         
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
         with h5py.File(filename,'w') as f:
             header=f.create_group('Header')
             header.attrs['NumFilesPerSnapshot']=self.NumFiles
             header.attrs['NumPart_Total']=npart_type
+<<<<<<< HEAD
             header.attrs['NumPart_Total_HighWord']=np.zeros(6,dtype=np.int32)
             header.attrs['Flag_Entropy_ICs']=int(1)
             header.attrs['MassTable']=self.MassTable
+=======
+            header.attrs['NumPart_ThisFile']=npart_type
+            header.attrs['NumPart_Total_HighWord']=np.zeros(npart_type.size,dtype=np.int32)
+            header.attrs['Flag_Entropy_ICs']=int(0)
+            header.attrs['MassTable']=masstable_type
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
             
             if sim_type=='SWIFT':
                 cosmo=f.create_group('Cosmology')
                 header.attrs['Scale-factor']=self.ScaleFactor
                 header.attrs['BoxSize']=self.BoxSize*np.ones(3)
+<<<<<<< HEAD
                 header.attrs['MassTable']=self.MassTable
                 header.attrs['Dimension']=3
                 cosmo.attrs['Omega_cdm']=self.OmegaDM
+=======
+                header.attrs['Dimension']=3
+                cosmo.attrs['Omega_cdm']=self.Omega0-self.OmegaBar
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                 cosmo.attrs['Omega_b']=self.OmegaBar
                 cosmo.attrs['Omega_lambda']=self.OmegaLambda
                 cosmo.attrs['h']=self.HubbleParam
@@ -816,7 +1010,15 @@ class SnapshotTools:
                 params.attrs['HubbleParam']=self.HubbleParam
             else:
                 header.attrs['Time']=self.ScaleFactor
+<<<<<<< HEAD
                 header.attrs['Redshift']=1./self.ScaleFactor-1.
+=======
+                if self.ScaleFactor<=0.0:
+                    redshift=0.0
+                else:
+                    redshift=1./self.ScaleFactor-1.
+                header.attrs['Redshift']=redshift
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                 header.attrs['BoxSize']=self.BoxSize
                 header.attrs['Omega0']=self.Omega0
                 header.attrs['OmegaLambda']=self.OmegaLambda
@@ -833,19 +1035,45 @@ class SnapshotTools:
                 header.attrs['Halo Centre']=kwargs.get('selection')[0:3]
                 header.attrs['Halo Systemic Velocity']=kwargs.get('selection')[4:6]
                 header.attrs['Halo Extent']=kwargs.get('selection')[6]
+<<<<<<< HEAD
             
             header.attrs['RunLabel']=sim_type
+=======
+
+            RunLabel=sim_type
+            if kwargs.get('RunLabel')!=None:
+                RunLabel=kwargs.get('RunLabel')
+
+            header.attrs['RunLabel']=RunLabel
+
+            print(sim_type)
+            print(npart_type)
+            print(masstable_type)
+            print(idx_type)
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
             iperiodic=1
             if kwargs.get('periodic')!=None:
                 if kwargs.get('periodic')==False:
                     iperiodic=0
             header.attrs['Periodic']=iperiodic
+<<<<<<< HEAD
+=======
+            
+            isics=False
+            if kwargs.get('ICs')!=None:
+                if kwargs.get('ICs')==True:
+                    isics=True
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
             NameOfMassBlock='Masses'
             if kwargs.get('NameOfMassBlock')!=None:
                 NameOfMassBlock=kwargs.get('NameOfMassBlock')
+<<<<<<< HEAD
                 
+=======
+            
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
             NumPart=np.sum(npart_type)
             NumPartType=npart_type.size
             print('Number of particles: %010d'%NumPart)
@@ -889,6 +1117,18 @@ class SnapshotTools:
                         data_u.attrs['CGSConversionFactor']=self.unit_velocity_in_cgs**2
                         data_u.attrs['aexp-scale-exponent']=0
                         data_u.attrs['h-scale-exponent']=0
+<<<<<<< HEAD
+=======
+                        
+                        # Smoothing length block
+                        data_smoothinglength=group.create_dataset('SmoothingLength',data=self.smoothinglength[0:idx_type[1]])
+                        data_smoothinglength.attrs['CGSConversionFactor']=self.unit_length_in_cgs
+                        data_smoothinglength.attrs['aexp-scale-exponent']=1
+                        data_smoothinglength.attrs['h-scale-exponent']=-1
+                        
+                        if isics==True:
+                            continue
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
 
                         # Density block
                         data_density=group.create_dataset('Density',data=self.rho[0:idx_type[1]])
@@ -896,18 +1136,24 @@ class SnapshotTools:
                         data_density.attrs['aexp-scale-exponent']=3
                         data_density.attrs['h-scale-exponent']=2
 
+<<<<<<< HEAD
                         # Smoothing length block
                         data_smoothinglength=group.create_dataset('SmoothingLength',data=self.smoothinglength[0:idx_type[1]])
                         data_smoothinglength.attrs['CGSConversionFactor']=self.unit_length_in_cgs
                         data_smoothinglength.attrs['aexp-scale-exponent']=1
                         data_smoothinglength.attrs['h-scale-exponent']=-1
 
+=======
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         # Gas metals block
                         data_gas_metals=group.create_dataset('Metallicity',data=self.gas_metallicity[0:idx_type[1]])
                         data_gas_metals.attrs['CGSConversionFactor']=1
                         data_gas_metals.attrs['aexp-scale-exponent']=0
                         data_gas_metals.attrs['h-scale-exponent']=-0
+<<<<<<< HEAD
 
+=======
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         
                         # Star formation rate block
                         data_gas_sfr=group.create_dataset('StarFormationRate',data=self.gas_sfr[0:idx_type[1]])
@@ -947,8 +1193,13 @@ def select_particles(val,valoffset,size,geometry,**kwargs):
         print('Ignoring periodicity')
     # Impose cut based on desired geometry
     if geometry=='cubic':
+<<<<<<< HEAD
         ipick=np.logical_and(np.abs(dval[:,0])<size,np.abs(dval[:,1])<size)
         ipick=np.logical_and(ipick,np.abs(dval[:,2])<size)
+=======
+        ipick=np.logical_and(np.abs(dval[:,0])<size/2,np.abs(dval[:,1])<size/2)
+        ipick=np.logical_and(ipick,np.abs(dval[:,2])<size/2)
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
     elif geometry=='spherical':
         r2=dval[:,0]**2+dval[:,1]**2+dval[:,2]**2
         ipick=np.where(r2<size*size)[0]

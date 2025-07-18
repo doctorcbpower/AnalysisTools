@@ -120,14 +120,37 @@ class ProfileTools:
         dpos=np.where(dpos>0.5*lbox,dpos-lbox,dpos)
         dpos=np.where(dpos<-0.5*lbox,dpos+lbox,dpos)
         r=np.sqrt(dpos[:,0]**2+dpos[:,1]**2+dpos[:,2]**2)
+<<<<<<< HEAD
         indx,rbins=self.radial_bins(r=r,rmin=rlim[0],rmax=rlim[1],nbins=numbins,bintype='log')
+=======
+        indx,rbins=self.radial_bins(r=r,rlim=rlim,nbins=numbins,bintype='log')
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
         rav,rhoav,rhomed=self.radial_profile(r=r,nbins=numbins,rbins=rbins,index=indx,var=mass[ipick])
         if type=='average':
             return rav,rhoav
         else:
             return rav,rhomed
         
+<<<<<<< HEAD
     def kinematic_radial_profile(self,pos,vel,poscen,velcen,size,lbox,rlim,numbins,bintype='log',**kwargs):
+=======
+    def plot_gas_profile(self,pos,rho,u,ipick,poscen,size,lbox,rlim,numbins,geometry='spherical',type='average'):
+#        ipick=st.select_particles(pos,poscen,size,geometry,periodic=True,scale_length=lbox)
+        dpos=pos[ipick]-poscen
+        dpos=np.where(dpos>0.5*lbox,dpos-lbox,dpos)
+        dpos=np.where(dpos<-0.5*lbox,dpos+lbox,dpos)
+        r=np.sqrt(dpos[:,0]**2+dpos[:,1]**2+dpos[:,2]**2)
+        indx,rbins=self.radial_bins(r=r,rlim=rlim,nbins=numbins,bintype='linear')
+        rav,rhoav,rhomed=self.radial_profile(r=r,nbins=numbins,rbins=rbins,index=indx,var=rho[ipick])
+        ruav,uav,umed=self.radial_profile(r=r,nbins=numbins,rbins=rbins,index=indx,var=u[ipick])
+        if type=='average':
+            return rav,rhoav,ruav,uav
+        else:
+            return rav,rhomed,ruav,umed
+        
+    def plot_kinematic_profile(self,pos,vel,poscen,velcen,size,lbox,rlim,numbins,bintype='log'):
+        print(pos,vel,poscen,velcen,size,lbox,rlim,numbins,bintype)
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
         ipick=st.select_particles(pos,poscen,size,geometry='spherical',periodic=True,scale_length=lbox)
         dpos=pos[ipick]-poscen
         dpos=np.where(dpos>0.5*lbox,dpos-lbox,dpos)
