@@ -32,8 +32,12 @@ class HaloTools:
                 self.HubbleParam=f['Parameters'].attrs['HubbleParam']
 
                 self.TotNgroups=f['Header'].attrs['Ngroups_Total'][()]
+<<<<<<< HEAD
 #                print(type(f['Header'].attrs.keys()))
                 if 'subgroups' in f['Header'].attrs.keys():
+=======
+                if any('subgroups' in x for x in list(f['Header'].attrs.keys()))==True:
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                     self.TotNsubgroups=f['Header'].attrs['Nsubgroups_Total'][()]
                 else:
                     self.TotNsubgroups=f['Header'].attrs['Nsubhalos_Total'][()]
@@ -52,13 +56,24 @@ class HaloTools:
                 self.GroupM200=f['Group/Group_M_Crit200'][()]
                 self.GroupR200=f['Group/Group_R_Crit200'][()]
                 self.GroupLen=f['Group/GroupLen'][()]
-                self.GroupOffsetType=f['Group/GroupOffsetType'][()]
+                if any('GroupOffsetType' in x for x in list(f['Group'].keys()))==True:
+                    self.GroupOffsetType=f['Group/GroupOffsetType'][()]
 
                 # # Read Subhalo Properties
                 #self.SubhaloRankInGr=f['Subhalo/SubhaloRankInGr'][()]  # 0 is a field halo
+<<<<<<< HEAD
                 self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()]#[np.where(SubhaloRankInGr!=0)[0]]
                 self.SubhaloLen=f['Subhalo/SubhaloLen'][()]#[np.where(SubhaloRankInGr!=0)[0]]
                 self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+=======
+                if any('SubhaloGroupNr' in x for x in list(f['Subhalo'].keys()))==True:
+                    self.SubhaloGroupNr=f['Subhalo/SubhaloGroupNr'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                else:
+                    self.SubhaloGroupNr=f['Subhalo/SubhaloGrNr'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                self.SubhaloLen=f['Subhalo/SubhaloLen'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+                if any('SubhaloOffsetType' in x for x in list(f['Subhalo'].keys()))==True:
+                    self.SubhaloOffsetType=f['Subhalo/SubhaloOffsetType'][()]#[np.where(SubhaloRankInGr!=0)[0]]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                 self.SubhaloPos=f['Subhalo/SubhaloPos'][()]#[np.where(SubhaloRankInGr!=0)[0]]
                 self.SubhaloVel=f['Subhalo/SubhaloVel'][()]#[np.where(SubhaloRankInGr!=0)[0]]
                 self.SubhaloMass=f['Subhalo/SubhaloMass'][()]#[np.where(SubhaloRankInGr!=0)[0]]
@@ -197,14 +212,22 @@ class HaloTools:
                         self.GroupMass[igstart:igfinish]=f['Mass_tot'][()]
                         self.GroupM200[igstart:igfinish]=f['Mass_200crit'][()]
                         self.GroupMFOF[igstart:igfinish]=f['Mass_FOF'][()]
+<<<<<<< HEAD
                         self.GroupSOM200[igstart:igfinish]=f['Mass_200crit'][()]
+=======
+#                        self.GroupSOM200[igstart:igfinish]=f['Mass_200crit'][()]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         self.GroupPos[igstart:igfinish]=(np.array([f['Xcminpot'][()],f['Ycminpot'][()],f['Zcminpot'][()]]).T)
                         self.GroupPosMBP[igstart:igfinish]=(np.array([f['Xcmbp'][()],f['Ycmbp'][()],f['Zcmbp'][()]]).T)
                         self.GroupPosCM[igstart:igfinish]=(np.array([f['Xc'][()],f['Yc'][()],f['Zc'][()]]).T)
                         self.GroupVel[igstart:igfinish]=(np.array([f['VXcminpot'][()],f['VYcminpot'][()],f['VZcminpot'][()]]).T)
                         self.GroupVelCM[igstart:igfinish]=(np.array([f['VXc'][()],f['VYc'][()],f['VZc'][()]]).T)
                         self.GroupR200[igstart:igfinish]=f['R_200crit'][()]
+<<<<<<< HEAD
                         self.GroupSOR200[igstart:igfinish]=f['R_200crit'][()]
+=======
+#                        self.GroupSOR200[igstart:igfinish]=f['R_200crit'][()]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         
                         self.GroupEkin[igstart:igfinish]=f['Ekin'][()]
                         self.GroupEpot[igstart:igfinish]=f['Epot'][()]
@@ -219,7 +242,11 @@ class HaloTools:
                         self.GroupNsubs=f['numSubStruct'][()]
                         self.GroupMass=f['Mass_tot'][()]
                         self.GroupM200=f['Mass_200crit'][()]
+<<<<<<< HEAD
                         self.GroupSOM200=f['SO_Mass_200.000000_rhocrit'][()]
+=======
+#                        self.GroupSOM200=f['SO_Mass_200.000000_rhocrit'][()]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         self.GroupMFOF=f['Mass_FOF'][()]
                         self.GroupPos=(np.array([f['Xcminpot'][()],f['Ycminpot'][()],f['Zcminpot'][()]]).T)
                         self.GroupPosMBP=(np.array([f['Xcmbp'][()],f['Ycmbp'][()],f['Zcmbp'][()]]).T)
@@ -227,7 +254,11 @@ class HaloTools:
                         self.GroupVel=(np.array([f['VXcminpot'][()],f['VYcminpot'][()],f['VZcminpot'][()]]).T)
                         self.GroupVelCM=(np.array([f['VXc'][()],f['VYc'][()],f['VZc'][()]]).T)
                         self.GroupR200=f['R_200crit'][()]
+<<<<<<< HEAD
                         self.GroupSOR200=f['SO_R_200.000000_rhocrit'][()]
+=======
+#                        self.GroupSOR200=f['SO_R_200.000000_rhocrit'][()]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                         self.GroupEkin=f['Ekin'][()]
                         self.GroupEpot=f['Epot'][()]
                         self.GroupLen=f['npart'][()]
@@ -399,11 +430,19 @@ class HaloTools:
 
             offset=0
             noffset=0
+<<<<<<< HEAD
             for n in range(TotNumGroups):
                 self.GroupLen[n]=var1[noffset]
                 noffset+=1
                 self.ParticleIDsInGroups[offset:self.GroupSize[n]+offset]=var1[noffset:self.GroupSize[n]+noffset]
                 self.ParticleTypeInGroups[offset:self.GroupSize[n]+offset]=var2[noffset:self.GroupSize[n]+noffset]
+=======
+            for n in range(self.TotNGroups):
+                self.GroupLen[n]=var1[noffset]
+                noffset+=1
+                self.ParticleIDsInGroups[offset:self.GroupLen[n]+offset]=var1[noffset:self.GroupLen[n]+noffset]
+                self.ParticleTypeInGroups[offset:self.GroupLen[n]+offset]=var2[noffset:self.GroupLen[n]+noffset]
+>>>>>>> 5bb954d (Synchronising after too long - will start to tidy up scripts and document them)
                 self.GroupOffset[n]=offset
                 offset+=self.GroupLen[n]
                 noffset+=self.GroupLen[n]
