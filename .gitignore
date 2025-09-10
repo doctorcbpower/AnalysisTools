@@ -4,6 +4,8 @@ __pycache__/
 *.pyd
 *.pyo
 
+.ipynb_checkpoints
+
 # Notebooks
 #*.ipynb
 
