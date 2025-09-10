@@ -5,10 +5,13 @@ __pycache__/
 *.pyo
 
 # Notebooks
-*.ipynb
+#*.ipynb
 
 # Images
 *.png
 *.jpg
 *.pdf
 
+.DS_Store
+
+*.egg-info
