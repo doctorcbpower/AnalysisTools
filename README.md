@@ -1,2 +1,7 @@
-# AnalysisTools
-Various scripts in python to process simulations
+## AnalysisTools
+
+Install using `pip install -e .`.
+
+Load as python module, `import analysistools`
+
+
