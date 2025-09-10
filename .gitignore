@@ -1,0 +1,14 @@
+# Byte-compiled/optimise/compiled files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# Notebooks
+*.ipynb
+
+# Images
+*.png
+*.jpg
+*.pdf
+
