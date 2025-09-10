@@ -223,7 +223,11 @@ class HaloTools:
                         self.GroupNsubs=f['numSubStruct'][()]
                         self.GroupMass=f['Mass_tot'][()]
                         self.GroupM200=f['Mass_200crit'][()]
-                        self.GroupSOM200=f['SO_Mass_200.000000_rhocrit'][()]
+                        if 'SO_Mass_200.000000_rhocrit' in f:
+                            self.GroupSOM200 = f['SO_Mass_200.000000_rhocrit'][()]
+                        else:
+                            print("SO_Mass_200.000000_rhocrit not found in file. Skipping...")
+                            self.GroupSOM200 = None  # or handle differently
                         self.GroupMFOF=f['Mass_FOF'][()]
                         self.GroupPos=(np.array([f['Xcminpot'][()],f['Ycminpot'][()],f['Zcminpot'][()]]).T)
                         self.GroupPosMBP=(np.array([f['Xcmbp'][()],f['Ycmbp'][()],f['Zcmbp'][()]]).T)
@@ -231,7 +235,11 @@ class HaloTools:
                         self.GroupVel=(np.array([f['VXcminpot'][()],f['VYcminpot'][()],f['VZcminpot'][()]]).T)
                         self.GroupVelCM=(np.array([f['VXc'][()],f['VYc'][()],f['VZc'][()]]).T)
                         self.GroupR200=f['R_200crit'][()]
-                        self.GroupSOR200=f['SO_R_200.000000_rhocrit'][()]
+                        if 'SO_R_200.000000_rhocrit' in f:
+                            self.GroupSOR200 = f['SO_Mass_200.000000_rhocrit'][()]
+                        else:
+                            print("SO_R_200.000000_rhocrit not found in file. Skipping...")
+                            self.GroupSOR200 = None  # or handle differently
                         self.GroupEkin=f['Ekin'][()]
                         self.GroupEpot=f['Epot'][()]
                         self.GroupLen=f['npart'][()]

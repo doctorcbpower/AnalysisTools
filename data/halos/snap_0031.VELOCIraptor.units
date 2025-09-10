@@ -1,0 +1,5 @@
+Cosmological_Sim : 1 # int32 
+Comoving_or_Physical : 0 # int32 
+Length_unit_to_kpc : 1000.000000 # float64 
+Velocity_unit_to_kms : 1.000000 # float64 
+Mass_unit_to_solarmass : 10000000000.000000 # float64 

@@ -19,7 +19,7 @@ class TreeTools:
     def __init__(self,treefilename,treefileformat,comoving_units=False,**kwargs):
         self.treefilename=treefilename
         self.treefileformat=treefileformat
-        self.comoving_units=comoving_units                
+        self.comoving_units=comoving_units
 
     def ReadMergerTreeCatalogue(self):
         if self.treefileformat=='SubFind':
@@ -264,7 +264,6 @@ class TreeTools:
             
                 Returns Redshift, Subhalo Mass, Parent Group Mass (200 times critical), Parent ID at SnapNum, Subhalo ID at SnapNum
             """
-            
             indx=np.where(self.TreeHalosID['Snap_%03d'%SnapshotNr]==MainSubhaloID)[0]
 
             if self.hostHaloID['Snap_%03d'%SnapshotNr][indx]!=-1:
@@ -276,6 +275,10 @@ class TreeTools:
             m200=np.array([])
             subhalo_number=np.array([],dtype=np.uint64)
             group_number=np.array([],dtype=np.uint64)
+            subhalo_pos=[]
+            subhalo_vel=[]
+            snapshot_number=[]
+            
 
             # Initial index is already determined at SnapNum SnapShotNr
             tree_length=0
@@ -286,11 +289,16 @@ class TreeTools:
             while SnapNum>SnapNumRoot:
                 redshift=np.append(redshift,1.0/self.Time['Snap_%03d'%SnapNum]-1.) # Redshift
                 mass=np.append(mass,self.GrpMassTot['Snap_%03d'%SnapNum][indx])  # Mass of main subhalo
-                
                 m200=np.append(m200,self.GrpM200['Snap_%03d'%SnapNum][indx])  # Mass of parent group, M200
+                subhalo_pos=np.append(subhalo_pos,self.SubhaloPos['Snap_%03d'%SnapNum][indx])  # Centre of mass of system
+                subhalo_vel=np.append(subhalo_vel,self.SubhaloVel['Snap_%03d'%SnapNum][indx])  # Centre of mass velocity of system
                 group_number=np.append(group_number,self.TreeHalosID['Snap_%03d'%SnapNum][indx])         # Unique ID of group at SnapNum
                 subhalo_number=np.append(subhalo_number,self.TreeHalosID['Snap_%03d'%SnapNum][indx])     # Unique ID of subhalo at SnapNum
+                snapshot_number=np.append(snapshot_number,SnapNum)
                 tree_length+=1
+
+                if self.TreeProgenitor['Snap_%03d'%SnapNum][indx].size==0:
+                    break
 
                 ProgHaloID=self.TreeProgenitor['Snap_%03d'%SnapNum][indx]
                 SnapNum=self.TreeProgenitorSnap['Snap_%03d'%SnapNum][indx][0]
@@ -325,9 +333,10 @@ class TreeTools:
                 ifinish=istart+self.prog_len[index][0]
                 prog_id=self.prog_ids[istart:ifinish][0]
 
-        return np.array(redshift),np.array(mass),np.array(m200),np.array(subhalo_pos),np.array(subhalo_vel),\
-               np.array(snapshot_number),np.array(group_number),np.array(subhalo_number),\
-               zform,alpha,deltam_over_m
+        return np.array(redshift),np.array(mass),np.array(m200),\
+               np.array(subhalo_pos),np.array(subhalo_vel),\
+               np.array(snapshot_number),np.array(group_number),\
+               np.array(subhalo_number),zform,alpha,deltam_over_m
             
     
     def TrackHaloDescendant(self,HaloID):
