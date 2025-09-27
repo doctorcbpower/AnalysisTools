@@ -28,7 +28,8 @@ If you want to write a snapshot (say, converting between formats, or only a subs
 ```
 idx_type=snap.ParticleOffsetsByType(snap.num_part_total)
 import numpy as np
-snap.write_snapshot("./data/snapshot_031",idx=np.arange(snap.pids.size),idx_type=idx_type,convention="arepo")
+snap.write_snapshot("./data/snapshot_031",idx=np.arange(snap.pids.size),idx_type=idx_type,convention="arepo",
+                    blocks_to_write=['pos','vel'])
 ```
 
 
