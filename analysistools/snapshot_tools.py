@@ -8,31 +8,31 @@ Created on Mon Jan 16 13:55:13 2023
 Script to read/write various snapshot data
 
 """
+
 import h5py
 import numpy as np
 import os
-import struct
 import logging
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Dict, Any
 
-from .snapio_hdf5 import read_hdf5
+from .snapio_hdf5 import read_hdf5, write_hdf5
 from .snapio_binary import read_binary
 
 class SnapshotTools:
     """
     Handle cosmological simulation snapshots (HDF5 or GADGET binary).
-
+    
     Usage:
     # Configure once, then read later:
     snap = SnapshotTools(snapfileformat="HDF5")
     snap.load_snapshot("snap_010.hdf5")
     data = snap.read()
-
+    
     # Or do it in one go:
     snap = SnapshotTools(snapfileformat="HDF5")
     data = snap.read("snap_011.hdf5")
     """
-
+    
     def __init__(
         self,
         snapfileformat: Union[int, str] = "HDF5",
@@ -43,7 +43,7 @@ class SnapshotTools:
         **kwargs,
     ):
         self.snapfilename: Optional[str] = None
-
+        
         # --- format normalisation ---
         fmtmap = {
             1: "SNAP1", 2: "SNAP2", 3: "HDF5",
@@ -52,13 +52,13 @@ class SnapshotTools:
         self.snapfileformat = fmtmap.get(snapfileformat, str(snapfileformat).upper())
         if self.snapfileformat not in {"SNAP1", "SNAP2", "HDF5"}:
             raise ValueError(f"Unknown snapshot format: {snapfileformat}")
-
+        
         # --- particle types ---
         self.gas_type = gas_type
         self.dm_type = dm_type
         self.star_type = star_type
         self.bh_type = bh_type
-
+        
         # --- options ---
         self.convention = kwargs.get("convention", "GADGET2/3")
         self.positions_only = kwargs.get("positions_only", False)
@@ -68,1492 +68,397 @@ class SnapshotTools:
         self.positions_type = kwargs.get("positions_type", "float32")
         self.pids_type = kwargs.get("pids_type", 32)
         self.not_hires_ptypes = kwargs.get("not_hires_ptypes", [2, 3, 7])
-
+        
+        # Set NumPartType for consistency
+        self.NumPartType = 6
+        
         self._set_units()
         
         logging.info(
             f"Initialised SnapshotTools (format={self.snapfileformat}, convention={self.convention})"
         )
-
+    
     def _set_units(self):
-        """
-        Define useful units needed for snapshots
-        """
-        SOLAR_MASS_IN_CGS=1.989e33
-        YEAR_IN_CGS=60*60*24*365
-        KPC_IN_CGS=3.0856e21
-        KM_PER_SEC_IN_CGS=1.e5
-        RHOCRIT0=27.755
-
-        self.unit_length_in_cgs=KPC_IN_CGS  # kpc
-        self.unit_mass_in_cgs=1e10*SOLAR_MASS_IN_CGS # 1e10 Msol
-        self.unit_velocity_in_cgs=KM_PER_SEC_IN_CGS # km/s
-        self.unit_time_in_cgs=self.unit_length_in_cgs/self.unit_velocity_in_cgs
-        self.unit_density_in_cgs=self.unit_mass_in_cgs/self.unit_length_in_cgs**3
-        self.unit_sfr_in_cgs=SOLAR_MASS_IN_CGS/YEAR_IN_CGS
- 
-    def load_snapshot(self, filename: str) -> None:
+        """Define useful units needed for snapshots"""
+        SOLAR_MASS_IN_CGS = 1.989e33
+        YEAR_IN_CGS = 60*60*24*365
+        KPC_IN_CGS = 3.0856e21
+        KM_PER_SEC_IN_CGS = 1.e5
+        RHOCRIT0 = 27.755
+        
+        self.unit_length_in_cgs = KPC_IN_CGS  # kpc
+        self.unit_mass_in_cgs = 1e10 * SOLAR_MASS_IN_CGS  # 1e10 Msol
+        self.unit_velocity_in_cgs = KM_PER_SEC_IN_CGS  # km/s
+        self.unit_time_in_cgs = self.unit_length_in_cgs / self.unit_velocity_in_cgs
+        self.unit_density_in_cgs = self.unit_mass_in_cgs / self.unit_length_in_cgs**3
+        self.unit_sfr_in_cgs = SOLAR_MASS_IN_CGS / YEAR_IN_CGS
+    
+    def load_snapshot(self, snapfilename: str) -> None:
         """Register and validate the snapshot file for later use."""
+        filename = snapfilename + '.hdf5'
+        if not os.path.exists(filename):
+            filename = snapfilename + '.0.hdf5'
         if not os.path.exists(filename):
             raise FileNotFoundError(f"Snapshot file {filename} not found")
         self.snapfilename = filename
         logging.info(f"Snapshot file set: {filename}")
+    
+    def _transfer_attributes_to_reader(self, reader):
+        """Transfer configuration attributes to the reader instance."""
+        attrs_to_transfer = [
+            'gas_type', 'dm_type', 'star_type', 'bh_type', 'convention',
+            'positions_only', 'hires_only', 'get_ptypes', 'extra_blocks',
+            'positions_type', 'pids_type', 'not_hires_ptypes', 'NumPartType',
+            'snapfilename'
+        ]
+        
+        for attr in attrs_to_transfer:
+            if hasattr(self, attr):
+                setattr(reader, attr, getattr(self, attr))
+    
+    def _transfer_attributes_to_writer(self, writer):
+        """Transfer configuration attributes to the writer instance."""
+        attrs_to_transfer = [
+            'gas_type', 'dm_type', 'star_type', 'bh_type', 'convention',
+            'positions_only', 'hires_only', 'extra_blocks', 'positions_type',
+            'pids_type', 'not_hires_ptypes',
+            'unit_length_in_cgs', 'unit_mass_in_cgs', 'unit_velocity_in_cgs',
+            'unit_time_in_cgs', 'unit_density_in_cgs', 'unit_sfr_in_cgs',
+            'num_part_type', 'num_part_total', 'num_part_this_file', 'mass_table',
+            'box_size', 'dimension', 'scale_factor', 'redshift', 'time',
+            'omega_dm', 'omega_b', 'omega_0', 'omega_lambda',
+            'h', 'hubble_param',
+            'flag_cooling', 'flag_stellar_age', 'flag_sfr', 'flag_metals',
+            'flag_feedback', 'flag_double_precision',
+            'selection', 'halo_centre', 'halo systemic_velocity', 'halo_extent',
+            'run_label', 'periodic',
+        ]
+        
+        for attr in attrs_to_transfer:
+            if hasattr(self, attr):
+                setattr(writer, attr, getattr(self, attr))
 
-    def read(self, filename: Optional[str] = None, convention: Optional[str] = None):
+    def _transfer_datasets_to_writer(self, writer, datasets_to_transfer, copy=False):
+        """Transfer datasets to the writer, with optional deep copy."""
+        for dset in datasets_to_transfer:
+            if hasattr(self, dset):
+                data = getattr(self, dset)
+                if copy:
+                    if hasattr(data, 'shape'):  # ndarray or h5py.Dataset
+                        data = np.array(data)   # make a real copy
+                    else:
+                        # fallback for generic mutable containers
+                        import copy as pycopy
+                        data = pycopy.deepcopy(data)
+                setattr(writer, dset, data)
+
+    def _transfer_attributes_from_reader(self, reader):
+        """Transfer data attributes from reader back to main instance."""
+        # Transfer all attributes that don't start with underscore
+        for attr_name in dir(reader):
+            if not attr_name.startswith('_') and not callable(getattr(reader, attr_name)):
+                setattr(self, attr_name, getattr(reader, attr_name))
+    
+    def read_snapshot(self, filename: Optional[str] = None, convention: Optional[str] = None):
         """
         Read the snapshot data.
-
+        
         Parameters
         ----------
         filename : str, optional
             If given, sets/overrides the snapshot file to read.
+        convention : str, optional
+            If given, overrides the simulation convention.
+            
+        Returns
+        -------
+        self : SnapshotTools
+            Returns self for method chaining, with data loaded as attributes.
         """
         if filename is not None:
             self.load_snapshot(filename)
-
+        
         if convention is not None:
             self.convention = convention
-            
-        if self.snapfilename is None:
-            raise RuntimeError("No snapshot file set. Use read(filename) or load_snapshot(filename) first.")
-
-        if self.snapfileformat == "HDF5":
-            reader=read_hdf5()
-            return reader.read_hdf5_snapshot(snapfilename=filename,convention=self.convention)
-        else:
-            return read_binary.read_binary_snapshot(filename)
-
-
-#class SnapshotTools:
-#    '''
-#    Read simulation snapshots - can be in HDF5 or GADGET binary format.
-#    
-#        Parameters:
-#            snapfilename - path of the snapshot
-#            snapfileformat - format of the snapshot; can be 1 or 2 (binary)
-#            or 3 (HDF5), or 'SNAP1/SNAP2' (binary) of 'HDF5'
-#            convention - 'SWIFT', 'GADGET4', 'AREPO', otherwise assumes 'GADGET2/3'
-#        
-#        If the file is in HDF5 formay, omit the .hdf5 suffix.
-#    '''
-#    def __init__(self,snapfilename,snapfileformat,gas_type=0,dm_type=1,star_type=4,bh_type=5,**kwargs):
-#        self.snapfilename=snapfilename
-#        self.snapfileformat=snapfileformat
-#        self.gas_type=gas_type
-#        self.dm_type=dm_type
-#        self.star_type=star_type
-#        self.bh_type=bh_type
-#        self.convention='GADGET'
-#        self.positions_only=False
-#        self.hires_only=False
-#        self.get_ptypes=False
-#        self.extra_blocks=[]
-#        self.positions_type='float32'
-#        self.pids_type=32
-#        self.not_hires_ptypes=[2,3,7]
-#
-#        # Definition of units in CGS
-#        self.unit_length_in_cgs=KPC_IN_CGS  # kpc
-#        self.unit_mass_in_cgs=1e10*SOLAR_MASS_IN_CGS # 1e10 Msol
-#        self.unit_velocity_in_cgs=KM_PER_SEC_IN_CGS # km/s
-#        self.unit_time_in_cgs=self.unit_length_in_cgs/self.unit_velocity_in_cgs
-#        self.unit_density_in_cgs=self.unit_mass_in_cgs/self.unit_length_in_cgs**3
-#        self.unit_sfr_in_cgs=SOLAR_MASS_IN_CGS/YEAR_IN_CGS
-#        
-#        if 'positions_type' in kwargs:
-#            self.positions_type=kwargs.get('positions_type')
-#        print('Assuming positions are type %s'%self.positions_type)
-#
-#        if 'pids_type' in kwargs:
-#            self.pids_type=kwargs.get('pids_type')
-#        print('Assuming particle IDs are type %d bit'%self.pids_type)
-#        
-#        if self.snapfileformat=='HDF5' or self.snapfileformat=='3':
-#            self.convention=kwargs.get('convention')
-#        if kwargs.get('positions_only'):
-#            self.positions_only=kwargs.get('positions_only')
-#        if kwargs.get('hires_only'):
-#            self.hires_only=kwargs.get('hires_only')
-#        if kwargs.get('extra_blocks'):
-#            self.extra_blocks=kwargs.get('extra_blocks')
-#        if kwargs.get('get_ptypes'):
-#            self.get_ptypes=kwargs.get('get_ptypes')
-
-
-#    def ReadSnapshot(self):
-#        '''
-#        Reads in data from a single or multiple snapshots.
-#        '''
-#
-#        self.NumPartType=6
-#
-#    def read_hdf5_snapshot(self):
-#        """Main function to read HDF5 snapshot data."""
-#        if self.snapfileformat not in ['HDF5', '3']:
-#            return
-#        
-#        # Determine filename
-#        filename = self._determine_filename()
-#        print('Reading data from %s' % filename)
-#        
-#        # Read header and setup
-#        with h5py.File(filename, 'r') as f:
-#            NameOfMassBlock = self._read_header_info(f)
-#            self._read_cosmological_params(f)
-#            self._check_potential_availability(f)
-#        
-#        # Calculate total particles and print summary
-#        NumPart = np.sum(self.NumPart_Total)
-#        self._print_summary(NumPart)
-#        
-#        # Allocate memory
-#        self._allocate_memory(NumPart)
-#        extra_flags = self._allocate_extra_block_memory()
-#        
-#        # Calculate offsets
-#        istart, ifinish = self._calculate_offsets()
-#        
-#        # Read particle data
-#        if self.NumFiles > 1:
-#            self._read_particle_data_multiple_files(self.snapfilename, NameOfMassBlock,
-#                                                   istart, ifinish, extra_flags)
-#        else:
-#            self._read_particle_data_single_file(filename, NameOfMassBlock,
-#                                                istart, ifinish, extra_flags)
-#
-#    def _determine_filename(self):
-#        """Determine the correct filename for the snapshot."""
-#        filename = self.snapfilename + '.hdf5'
-#        if not os.path.exists(filename):
-#            filename = self.snapfilename + '.0.hdf5'
-#        return filename
-#    
-#    def _read_header_info(self, f):
-#        """Extract header information from the HDF5 file."""
-#        self.NumFiles = f['Header'].attrs['NumFilesPerSnapshot']
-#        self.NumPart_Total = f['Header'].attrs['NumPart_Total'][()]
-#        self.NumPartType = np.shape(self.NumPart_Total)[0]
-#        self.MassTable = f['Header'].attrs['MassTable'][()]
-#        
-#        # Determine mass block name
-#        NameOfMassBlock = 'Mass'
-#        ii = np.where(f['Header'].attrs['MassTable'][()] == 0)[0]
-#        for indx in ii:
-#            if f['Header'].attrs['NumPart_Total'][indx] > 0:
-#                if 'Masses' in list(f['PartType%d' % indx].keys()):
-#                    NameOfMassBlock = 'Masses'
-#        
-#        return NameOfMassBlock
-#    
-#    def _read_cosmological_params(self, f):
-#        """Read cosmological parameters based on simulation convention."""
-#        if self.convention == 'SWIFT':
-#            self.ScaleFactor = f['Header'].attrs['Scale-factor']
-#            self.BoxSize = f['Header'].attrs['BoxSize'][()][0]
-#            self.OmegaDM = f['Cosmology'].attrs['Omega_cdm']
-#            self.OmegaBar = f['Cosmology'].attrs['Omega_b']
-#            self.Omega0 = self.OmegaDM + self.OmegaBar
-#            self.OmegaLambda = f['Cosmology'].attrs['Omega_lambda']
-#            self.HubbleParam = f['Cosmology'].attrs['h']
-#        elif self.convention in ['GADGET4', 'AREPO']:
-#            self.ScaleFactor = f['Header'].attrs['Time']
-#            self.BoxSize = f['Header'].attrs['BoxSize']
-#            self.Omega0 = f['Parameters'].attrs['Omega0']
-#            self.OmegaLambda = f['Parameters'].attrs['OmegaLambda']
-#            self.HubbleParam = f['Parameters'].attrs['HubbleParam']
-#        else:
-#            self.ScaleFactor = f['Header'].attrs['Time']
-#            self.BoxSize = f['Header'].attrs['BoxSize']
-#            self.Omega0 = f['Header'].attrs['Omega0']
-#            self.OmegaLambda = f['Header'].attrs['OmegaLambda']
-#            self.HubbleParam = f['Header'].attrs['HubbleParam']
-#    
-#    def _check_potential_availability(self, f):
-#        """Check if potential data is available."""
-#        self.ispotential = False
-#        if 'PartType1' in list(f.keys()):
-#            if 'Potential' in f['PartType1'].keys():
-#                self.ispotential = True
-#    
-#    def _print_summary(self, NumPart):
-#        """Print summary information about the snapshot."""
-#        print('Simulation scale factor: %lf' % self.ScaleFactor)
-#        if self.NumFiles > 1:
-#            print('Data is split across %d files' % self.NumFiles)
-#        
-#        print('Number of particles: %010d' % NumPart)
-#        print('Number of particle types: %d' % self.NumPartType)
-#        
-#        idx_with_mass = np.where(self.MassTable > 0)[0]
-#        NumPart_InMassBlock = np.sum(self.NumPart_Total[idx_with_mass])
-#        if NumPart_InMassBlock > 0:
-#            print('Number of particles in mass block: %010d' % NumPart_InMassBlock)
-#        
-#        if self.hires_only:
-#            hires_particles = (self.NumPart_Total[self.gas_type] +
-#                             self.NumPart_Total[self.dm_type] +
-#                             self.NumPart_Total[self.star_type] +
-#                             self.NumPart_Total[self.bh_type])
-#            print('Number of HIRES particles: %010d' % hires_particles)
-#    
-#    def _allocate_memory(self, NumPart):
-#        """Allocate memory for particle data arrays."""
-#        # Position arrays
-#        if self.positions_type == 'float64':
-#            self.pos = np.ndarray(shape=(NumPart, 3), dtype=np.float64)
-#        else:
-#            self.pos = np.ndarray(shape=(NumPart, 3), dtype=np.float32)
-#        
-#        # Basic particle data
-#        if not self.positions_only:
-#            self.vel = np.ndarray(shape=(NumPart, 3))
-#            if self.pids_type == 32:
-#                self.pids = np.ndarray(shape=(NumPart), dtype=np.uint32)
-#            else:
-#                self.pids = np.ndarray(shape=(NumPart), dtype=np.uint64)
-#            self.mass = np.ndarray(shape=(NumPart))
-#        
-#        # Gas particle specific arrays
-#        if self.NumPart_Total[0] > 0 and not self.positions_only:
-#            self.u = np.ndarray(shape=(self.NumPart_Total[0]))
-#            self.rho = np.ndarray(shape=(self.NumPart_Total[0]))
-#            if self.convention != 'Arepo':
-#                self.smoothinglength = np.ndarray(shape=(self.NumPart_Total[0]))
-#        
-#        # Particle type array
-#        if self.get_ptypes:
-#            self.ptype = np.ones(shape=(NumPart), dtype=np.int32)
-#            ioffset = np.zeros(shape=(self.NumPartType + 1), dtype=np.uint64)
-#            ioffset[1:] = np.cumsum(self.NumPart_Total)
-#            for i in range(self.NumPartType):
-#                self.ptype[ioffset[i]:ioffset[i+1]] = self.ptype[ioffset[i]:ioffset[i+1]] * i
-#        
-#        # Potential array
-#        if self.ispotential:
-#            self.potential = np.ndarray(shape=(NumPart))
-#    
-#    def _allocate_extra_block_memory(self):
-#        """Allocate memory for extra data blocks."""
-#        extra_flags = {}
-#        
-#        if len(self.extra_blocks) > 0:
-#            print('Loading extra blocks: %s' % self.extra_blocks)
-#            
-#            if 'AGE' in self.extra_blocks:
-#                self.stellarage = np.ndarray(shape=(self.NumPart_Total[self.star_type]))
-#                extra_flags['isstellarage'] = True
-#            
-#            if 'Z' in self.extra_blocks:
-#                self.gas_metallicity = np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-#                self.stellar_metallicity = np.ndarray(shape=(self.NumPart_Total[self.star_type]))
-#                extra_flags['ismetallicity'] = True
-#            
-#            if 'SFR' in self.extra_blocks:
-#                self.gas_sfr = np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-#                extra_flags['issfr'] = True
-#            
-#            if 'STELLARGENS' in self.extra_blocks:
-#                self.stellargen = np.ndarray(shape=(self.NumPart_Total[self.star_type]), dtype=np.int32)
-#                extra_flags['isstellargens'] = True
-#            
-#            if 'INIT_MASS' in self.extra_blocks:
-#                self.stellarinitmass = np.ndarray(shape=(self.NumPart_Total[self.star_type]), dtype=np.float32)
-#                extra_flags['isstellarinitmass'] = True
-#            
-#            if 'POT' in self.extra_blocks:
-#                self.potential = np.ndarray(shape=(np.sum(self.NumPart_Total)))
-#                extra_flags['ispotential'] = True
-#        
-#        return extra_flags
-#    
-#    def _calculate_offsets(self):
-#        """Calculate starting offsets for each particle type."""
-#        istart = np.zeros(self.NumPartType, dtype=np.uint64)
-#        offset = 0
-#        
-#        for i in range(self.NumPartType):
-#            if self.NumPart_Total[i] > 0:
-#                istart[i] = offset
-#            offset += self.NumPart_Total[i]
-#        
-#        ifinish = np.copy(istart)
-#        print('istart:', istart)
-#        
-#        return istart, ifinish
-#    
-#    def _read_particle_data_single_file(self, filename, NameOfMassBlock, istart, ifinish, extra_flags):
-#        """Read particle data from a single HDF5 file."""
-#        with h5py.File(filename, 'r') as f:
-#            jstart = 0
-#            
-#            for itype in range(self.NumPartType):
-#                if self.hires_only and itype in self.not_hires_ptypes:
-#                    print('Skipping Particle Type %d' % itype)
-#                    continue
-#                
-#                if self.NumPart_Total[itype] > 0:
-#                    ifinish[itype] = istart[itype] + self.NumPart_Total[itype]
-#                    
-#                    # Read basic particle data
-#                    self._read_basic_particle_data(f, itype, istart[itype], ifinish[itype], NameOfMassBlock)
-#                    
-#                    # Read type-specific data
-#                    if itype == self.gas_type:
-#                        jstart = self._read_gas_data(f, itype, istart[itype], ifinish[itype],
-#                                                   jstart, extra_flags)
-#                    elif itype == self.star_type:
-#                        jstart = self._read_star_data(f, itype, istart[itype], ifinish[itype],
-#                                                    jstart, extra_flags)
-#                    
-#                    istart[itype] = ifinish[itype]
-#    
-#    def _read_particle_data_multiple_files(self, base_filename, NameOfMassBlock, istart, ifinish, extra_flags):
-#        """Read particle data from multiple HDF5 files."""
-#        for i in range(self.NumFiles):
-#            filename = base_filename + '.%d.hdf5' % i
-#            print('Reading in file %s...' % filename)
-#            
-#            with h5py.File(filename, 'r') as f:
-#                NumPart_ThisFile = f['Header'].attrs['NumPart_ThisFile'][()]
-#                jstart = 0
-#                
-#                for itype in range(self.NumPartType):
-#                    if self.hires_only and itype in self.not_hires_ptypes:
-#                        print('Skipping Particle Type %d' % itype)
-#                        continue
-#                    
-#                    if NumPart_ThisFile[itype] > 0:
-#                        ifinish[itype] = istart[itype] + NumPart_ThisFile[itype]
-#                        
-#                        # Read basic particle data
-#                        self._read_basic_particle_data(f, itype, istart[itype], ifinish[itype], NameOfMassBlock)
-#                        
-#                        # Read type-specific data
-#                        if itype == self.gas_type:
-#                            jstart = self._read_gas_data(f, itype, istart[itype], ifinish[itype],
-#                                                       jstart, extra_flags)
-#                        elif itype == self.star_type:
-#                            jstart = self._read_star_data(f, itype, istart[itype], ifinish[itype],
-#                                                        jstart, extra_flags, NumPart_ThisFile[itype])
-#                        
-#                        istart[itype] = ifinish[itype]
-#    
-#    def _read_basic_particle_data(self, f, itype, istart, ifinish, NameOfMassBlock):
-#        """Read basic particle data (positions, velocities, IDs, masses, potential)."""
-#        # Positions
-#        self.pos[istart:ifinish] = f['PartType%d/Coordinates' % itype][()]
-#        
-#        if self.positions_only:
-#            return
-#        
-#        # Velocities and IDs
-#        self.vel[istart:ifinish] = f['PartType%d/Velocities' % itype][()]
-#        self.pids[istart:ifinish] = f['PartType%d/ParticleIDs' % itype][()]
-#        
-#        # Masses
-#        if self.MassTable[itype] == 0:
-#            if NameOfMassBlock == 'Mass':
-#                self.mass[istart:ifinish] = f['PartType%d/Mass' % itype][()]
-#            else:
-#                if itype == 5 and self.convention == 'SWIFT':
-#                    self.mass[istart:ifinish] = f['PartType%d/DynamicalMasses' % itype][()]
-#                else:
-#                    self.mass[istart:ifinish] = f['PartType%d/Masses' % itype][()]
-#        else:
-#            self.mass[istart:ifinish] = self.MassTable[itype]
-#        
-#        # Potential
-#        if self.ispotential:
-#            self.potential[istart:ifinish] = f['PartType%d/Potential' % itype][()]
-#    
-#    def _read_gas_data(self, f, itype, istart, ifinish, jstart, extra_flags):
-#        """Read gas particle specific data."""
-#        if self.convention == 'SWIFT':
-#            self.u[istart:ifinish] = f['PartType%d/InternalEnergies' % itype][()]
-#            self.rho[istart:ifinish] = f['PartType%d/Densities' % itype][()]
-#        else:
-#            self.u[istart:ifinish] = f['PartType%d/InternalEnergy' % itype][()]
-#            self.rho[istart:ifinish] = f['PartType%d/Density' % itype][()]
-#            if self.convention != 'Arepo':
-#                self.smoothinglength[istart:ifinish] = f['PartType%d/SmoothingLength' % itype][()]
-#        
-#        # Extra gas data
-#        if extra_flags.get('ismetallicity', False):
-#            if f['PartType%d/Metallicity' % itype].ndim > 1:
-#                self.gas_metallicity[istart:ifinish] = f['PartType%d/Metallicity' % itype][:, 0]
-#            else:
-#                self.gas_metallicity[istart:ifinish] = f['PartType%d/Metallicity' % itype][()]
-#        
-#        if extra_flags.get('issfr', False):
-#            self.gas_sfr[istart:ifinish] = f['PartType%d/StarFormationRate' % itype][()]
-#        
-#        return jstart
-#    
-#    def _read_star_data(self, f, itype, istart, ifinish, jstart, extra_flags, num_particles=None):
-#        """Read star particle specific data."""
-#        if num_particles is None:
-#            jfinish = jstart + self.NumPart_Total[itype]
-#        else:
-#            jfinish = jstart + num_particles
-#        
-#        if extra_flags.get('ismetallicity', False):
-#            if f['PartType%d/Metallicity' % itype].ndim > 1:
-#                self.stellar_metallicity[jstart:jfinish] = f['PartType%d/Metallicity' % itype][:, 0]
-#            else:
-#                self.stellar_metallicity[jstart:jfinish] = f['PartType%d/Metallicity' % itype][()]
-#        
-#        if extra_flags.get('isstellarage', False):
-#            self.stellarage[jstart:jfinish] = f['PartType%d/StellarFormationTime' % itype][()]
-#        
-#        if extra_flags.get('isstellargens', False):
-#            self.stellargen[jstart:jfinish] = f['PartType%d/ID_Generations' % itype][()]
-#        
-#        if extra_flags.get('isstellarinitmass', False):
-#            self.stellarinitmass[jstart:jfinish] = f['PartType%d/StellarInitMass' % itype][()]
-#        
-#        return jfinish
-#    
-#
-##        if self.snapfileformat=='HDF5' or self.snapfileformat=='3':
-##            filename=self.snapfilename+'.hdf5'
-##            if os.path.exists(filename)==False:
-##              filename=self.snapfilename+'.0.hdf5'
-##            print('Reading data from %s'%filename)
-##            
-##            with h5py.File(filename,'r') as f:
-##                self.NumFiles=f['Header'].attrs['NumFilesPerSnapshot']
-##                NameOfMassBlock='Mass'
-##                ii=np.where(f['Header'].attrs['MassTable'][()]==0)[0]
-##                for indx in ii:
-##                    if f['Header'].attrs['NumPart_Total'][indx]>0:
-##                        if 'Masses' in list(f['PartType%d'%indx].keys()):
-##                            NameOfMassBlock='Masses'
-##                self.NumPart_Total=f['Header'].attrs['NumPart_Total'][()]
-##                self.NumPartType=np.shape(self.NumPart_Total)[0]
-##                if self.convention=='SWIFT':
-##                    self.ScaleFactor=f['Header'].attrs['Scale-factor']
-##                    self.BoxSize=f['Header'].attrs['BoxSize'][()][0]
-##                    self.OmegaDM=f['Cosmology'].attrs['Omega_cdm']
-##                    self.OmegaBar=f['Cosmology'].attrs['Omega_b']
-##                    self.Omega0=self.OmegaDM+self.OmegaBar
-##                    self.OmegaLambda=f['Cosmology'].attrs['Omega_lambda']
-##                    self.HubbleParam=f['Cosmology'].attrs['h']
-##                    self.MassTable=f['Header'].attrs['MassTable'][()]
-##                elif self.convention=='GADGET4' or self.convention=='AREPO':
-##                    self.ScaleFactor=f['Header'].attrs['Time']
-##                    self.BoxSize=f['Header'].attrs['BoxSize']
-##                    self.Omega0=f['Parameters'].attrs['Omega0']
-##                    self.OmegaLambda=f['Parameters'].attrs['OmegaLambda']
-##                    self.HubbleParam=f['Parameters'].attrs['HubbleParam']
-##                    self.MassTable=f['Header'].attrs['MassTable'][()]
-##                else:
-##                    self.ScaleFactor=f['Header'].attrs['Time']
-##                    self.BoxSize=f['Header'].attrs['BoxSize']
-##                    self.Omega0=f['Header'].attrs['Omega0']
-##                    self.OmegaLambda=f['Header'].attrs['OmegaLambda']
-##                    self.HubbleParam=f['Header'].attrs['HubbleParam']
-##                    self.MassTable=f['Header'].attrs['MassTable'][()]
-##                print('Simulation scale factor: %lf'%self.ScaleFactor)
-##                if self.NumFiles>1:
-##                    print('Data is split across %d files'%self.NumFiles)
-##                self.ispotential=False
-##                if 'PartType1' in list(f.keys()):
-##                    if 'Potential' in f['PartType1'].keys():
-##                        self.ispotential=True
-##
-##            NumPart=np.sum(self.NumPart_Total)
-##            print('Number of particles: %010d'%NumPart)
-##            print('Number of particle types: %d'%self.NumPartType)
-##            idx_with_mass=np.where(self.MassTable>0)[0]
-##            NumPart_InMassBlock=np.sum(self.NumPart_Total[idx_with_mass])
-##            if NumPart_InMassBlock>0:
-##                print('Number of particles in mass block: %010d'%NumPart_InMassBlock)
-##                
-##            if self.hires_only==True:
-##                NumPart=self.NumPart_Total[self.gas_type]+self.NumPart_Total[self.dm_type]+self.NumPart_Total[self.star_type]+self.NumPart_Total[self.bh_type]
-##                print('Number of HIRES particles: %010d'%NumPart)
-##
-##            if self.positions_type=='float64':
-##                self.pos=np.ndarray(shape=(NumPart,3),dtype=np.float64)
-##            else:
-##                self.pos=np.ndarray(shape=(NumPart,3),dtype=np.float32)
-##
-##            if self.positions_only==False:
-##                self.vel=np.ndarray(shape=(NumPart,3))
-##                if self.pids_type==32:
-##                    self.pids=np.ndarray(shape=(NumPart),dtype=np.uint32)
-##                else:
-##                    self.pids=np.ndarray(shape=(NumPart),dtype=np.uint64)
-##                self.mass=np.ndarray(shape=(NumPart))
-##            
-##            if self.NumPart_Total[0]>0 and self.positions_only==False:
-##                self.u=np.ndarray(shape=(self.NumPart_Total[0]))
-##                self.rho=np.ndarray(shape=(self.NumPart_Total[0]))
-##                if self.convention!='Arepo':
-##                    self.smoothinglength=np.ndarray(shape=(self.NumPart_Total[0]))
-##
-##            if self.get_ptypes==True:
-##                self.ptype=np.ones(shape=(NumPart),dtype=np.int32)
-##                ioffset=np.zeros(shape=(self.NumPartType+1),dtype=np.uint64)
-##                ioffset[1:]=np.cumsum(self.NumPart_Total)
-##                for i in range(self.NumPartType):
-##                    self.ptype[ioffset[i]:ioffset[i+1]]=self.ptype[ioffset[i]:ioffset[i+1]]*i
-##                
-##            if self.ispotential==True:
-##                self.potential=np.ndarray(shape=(NumPart))
-##            isstellarage=False
-##            ismetallicity=False
-##            issfr=False
-##            isstellargens=False
-##            isstellarinitmass=False
-##            ispotential=False
-##            
-##            if len(self.extra_blocks)>0:
-##                print('Loading extra blocks: %s'%self.extra_blocks)
-##                if 'AGE' in self.extra_blocks:
-##                    self.stellarage=np.ndarray(shape=(self.NumPart_Total[self.star_type]))
-##                    isstellarage=True
-##                if 'Z' in self.extra_blocks:
-##                    self.gas_metallicity=np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-##                    self.stellar_metallicity=np.ndarray(shape=(self.NumPart_Total[self.star_type]))
-##                    ismetallicity=True
-##                if 'SFR' in self.extra_blocks:
-##                    self.gas_sfr=np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-##                    issfr=True
-##                if 'STELLARGENS' in self.extra_blocks:
-##                    self.stellargen=np.ndarray(shape=(self.NumPart_Total[self.star_type]),dtype=np.int32)
-##                    isstellargens=True
-##                if 'INIT_MASS' in self.extra_blocks:
-##                    self.stellarinitmass=np.ndarray(shape=(self.NumPart_Total[self.star_type]),dtype=np.float32)
-##                    isstellarinitmass=True
-##                if 'POT' in self.extra_blocks:
-##                    self.potential=np.ndarray(shape=(NumPart))
-##                    ispotential=True
-##                
-##            istart=np.zeros(self.NumPartType,dtype=np.uint64)
-##            offset=0
-##            
-##            for i in range(self.NumPartType):
-###                if i in self.not_hires_ptypes:
-###                    continue
-##                if self.NumPart_Total[i]>0:
-##                    istart[i]=offset
-##                offset+=self.NumPart_Total[i]
-###            istart=np.cumsum(self.NumPart_Total)
-##            ifinish=np.copy(istart)
-##            print('istart:',istart)
-##            jstart=0
-##            jfinish=np.copy(jstart)
-##            
-##            jstart=0
-##            jfinish=np.copy(jstart)
-##            
-##            if self.NumFiles>1:
-##                for i in range(self.NumFiles):
-##                    filename=self.snapfilename+'.%d.hdf5'%i
-##                    print('Reading in file %s...'%filename)
-##                    with h5py.File(filename,'r') as f:
-##                        NumPart_ThisFile=f['Header'].attrs['NumPart_ThisFile'][()]
-##                        for itype in range(self.NumPartType):
-##                            if self.hires_only==True and itype in self.not_hires_ptypes:
-##                                print('Skipping Particle Type %d'%itype)
-##                                continue
-##                            if NumPart_ThisFile[itype]>0:
-##                                ifinish[itype]=istart[itype]+NumPart_ThisFile[itype]
-##                                self.pos[istart[itype]:ifinish[itype]]=f['PartType%d/Coordinates'%itype][()]
-##                                if self.positions_only==True:
-##                                    continue
-##                                self.vel[istart[itype]:ifinish[itype]]=f['PartType%d/Velocities'%itype][()]
-##                                self.pids[istart[itype]:ifinish[itype]]=f['PartType%d/ParticleIDs'%itype][()]
-##                                if self.MassTable[itype]==0:
-##                                    if NameOfMassBlock=='Mass':
-##                                        self.mass[istart[itype]:ifinish[itype]]=f['PartType%d/Mass'%itype][()]
-##                                    else:
-##                                        if itype==5 and self.convention=='SWIFT':
-##                                            self.mass[istart[itype]:ifinish[itype]]=f['PartType%d/DynamicalMasses'%itype][()]
-##                                        else:
-##                                           self.mass[istart[itype]:ifinish[itype]]=f['PartType%d/Masses'%itype][()]
-##                                else:
-##                                    self.mass[istart[itype]:ifinish[itype]]=self.MassTable[itype]
-##                                if self.ispotential==True:
-##                                    self.potential[istart[itype]:ifinish[itype]]=f['PartType%d/Potential'%itype][()]
-##                                if itype==self.gas_type:
-##                                    if self.convention=='SWIFT':
-##                                        self.u[istart[itype]:ifinish[itype]]=f['PartType%d/InternalEnergies'%itype][()]
-##                                        self.rho[istart[itype]:ifinish[itype]]=f['PartType%d/Densities'%itype][()]
-##                                    else:
-##                                        self.u[istart[itype]:ifinish[itype]]=f['PartType%d/InternalEnergy'%itype][()]
-##                                        self.rho[istart[itype]:ifinish[itype]]=f['PartType%d/Density'%itype][()]
-##                                        if self.convention!='Arepo':
-##                                            self.smoothinglength[istart[itype]:ifinish[itype]]=f['PartType%d/SmoothingLength'%itype][()]
-## 
-##                                    if ismetallicity==True:
-##                                        if f['PartType%d/Metallicity'%itype].ndim>1:
-##                                            self.gas_metallicity[istart[itype]:ifinish[itype]]=f['PartType%d/Metallicity'%itype][:,0]
-##                                        else:
-##                                            self.gas_metallicity[istart[itype]:ifinish[itype]]=f['PartType%d/Metallicity'%itype][()]
-##                                    if issfr==True:
-##                                        self.gas_sfr[istart[itype]:ifinish[itype]]=f['PartType%d/StarFormationRate'%itype][()]
-##                                if itype==self.star_type:
-##                                    jfinish=jstart+NumPart_ThisFile[itype]
-##                                    if ismetallicity==True:
-##                                        if f['PartType%d/Metallicity'%itype].ndim>1:
-##                                            self.stellar_metallicity[jstart:jfinish]=f['PartType%d/Metallicity'%itype][:,0]
-##                                        else:
-##                                            self.stellar_metallicity[jstart:jfinish]=f['PartType%d/Metallicity'%itype][()]
-##                                    if isstellarage==True:
-##                                        self.stellarage[jstart:jfinish]=f['PartType%d/StellarFormationTime'%itype][()]
-##                                    if isstellargens==True:
-##                                        self.stellargen[jstart:jfinish]=f['PartType%d/ID_Generations'%itype][()]
-##                                    if isstellarinitmass==True:
-##                                        self.stellarinitmass[jstart:jfinish]=f['PartType%d/StellarInitMass'%itype][()]
-##
-##                                    jstart=jfinish
-##
-##                                istart[itype]=ifinish[itype]
-##            else:
-##                with h5py.File(filename,'r') as f:
-##                    for itype in range(self.NumPartType):
-##                        if self.hires_only==True:
-##                            if itype in self.not_hires_ptypes:
-##                                print('Skipping Particle Type %d'%itype)
-##                                continue
-##                        if self.NumPart_Total[itype]>0:
-##                            ifinish[itype]=istart[itype]+self.NumPart_Total[itype]
-##                            print(ifinish[itype]-istart[itype],itype,istart[itype],ifinish[itype],self.NumPart_Total[itype])
-##
-##                            self.pos[istart[itype]:ifinish[itype]]=f['PartType%d/Coordinates'%itype][()]
-##                            if self.positions_only==True:
-##                                continue
-##
-##                            self.vel[istart[itype]:ifinish[itype]]=f['PartType%d/Velocities'%itype][()]
-##                            self.pids[istart[itype]:ifinish[itype]]=f['PartType%d/ParticleIDs'%itype][()]
-##                            if self.MassTable[itype]==0:
-##                                if NameOfMassBlock=='Mass':
-##                                    self.mass[istart[itype]:ifinish[itype]]=f['PartType%d/Mass'%itype][()]
-##                                else:
-##                                    if itype==5 and self.convention=='SWIFT':
-##                                        self.mass[istart[itype]:ifinish[itype]]=f['PartType%d/DynamicalMasses'%itype][()]
-##                                    else:
-##                                       self.mass[istart[itype]:ifinish[itype]]=f['PartType%d/Masses'%itype][()]
-##                            else:
-##                                self.mass[istart[itype]:ifinish[itype]]=self.MassTable[itype]
-##                            if self.ispotential==True:
-##                                self.potential[istart[itype]:ifinish[itype]]=f['PartType%d/Potential'%itype][()]
-##                                
-##                            if itype==self.gas_type:
-##                                if self.convention=='SWIFT':
-##                                    self.u[istart[itype]:ifinish[itype]]=f['PartType%d/InternalEnergies'%itype][()]
-##                                    self.rho[istart[itype]:ifinish[itype]]=f['PartType%d/Densities'%itype][()]
-##                                else:
-##                                    self.u[istart[itype]:ifinish[itype]]=f['PartType%d/InternalEnergy'%itype][()]
-##                                    self.rho[istart[itype]:ifinish[itype]]=f['PartType%d/Density'%itype][()]
-##                                    if self.convention!='Arepo':
-##                                        self.smoothinglength[istart[itype]:ifinish[itype]]=f['PartType%d/SmoothingLength'%itype][()]
-##
-##                                if ismetallicity==True:
-##                                    if f['PartType%d/Metallicity'%itype].ndim>1:
-##                                        self.gas_metallicity[istart[itype]:ifinish[itype]]=f['PartType%d/Metallicity'%itype][:,0]
-##                                    else:
-##                                        self.gas_metallicity[istart[itype]:ifinish[itype]]=f['PartType%d/Metallicity'%itype][()]
-##                                if issfr==True:
-##                                    self.gas_sfr[istart[itype]:ifinish[itype]]=f['PartType%d/StarFormationRate'%itype][()]
-##                            if itype==self.star_type:
-##                                jfinish=jstart+self.NumPart_Total[itype]
-##                                if ismetallicity==True:
-##                                    if f['PartType%d/Metallicity'%itype].ndim>1:
-##                                        self.stellar_metallicity[jstart:jfinish]=f['PartType%d/Metallicity'%itype][:,0]
-##                                    else:
-##                                        self.stellar_metallicity[jstart:jfinish]=f['PartType%d/Metallicity'%itype][()]
-##                                if isstellarage==True:
-##                                    self.stellarage[jstart:jfinish]=f['PartType%d/StellarFormationTime'%itype][()]
-##                                if isstellargens==True:
-##                                    self.stellargen[jstart:jfinish]=f['PartType%d/ID_Generations'%itype][()]
-##                                if isstellarinitmass==True:
-##                                    self.stellarinitmass[jstart:jfinish]=f['PartType%d/StellarInitMass'%itype][()]
-## 
-##                                jstart=jfinish
-##                            istart[itype]=ifinish[itype]
-##        else:
-#            fileroot=self.snapfilename
-#            
-#            filename=fileroot
-#            
-#            if os.path.exists(filename)==False:
-#              filename=fileroot+'.0'
-#            print('Reading data from %s'%filename)
-#
-#            with open(filename,'rb') as f:
-#                offset=0
-#
-#                if self.snapfileformat=='SNAP2':
-#                    offset+=16
-#
-#                offset+=4
-#                f.seek(offset,os.SEEK_SET)
-#                self.NumPart_ThisFile=np.fromfile(f,dtype=np.int32,count=6)
-#
-#                offset+=24
-#                f.seek(offset,os.SEEK_SET)
-#                self.MassTable=np.fromfile(f,dtype=np.float64,count=6)
-#
-#                offset+=48
-#                f.seek(offset,os.SEEK_SET)
-#                self.ScaleFactor=np.fromfile(f,dtype=np.float64,count=1)[0]
-#
-#                offset+=8
-#                f.seek(offset,os.SEEK_SET)
-#                self.Redshift=np.fromfile(f,dtype=np.float64,count=1)[0]
-#
-#                offset+=16
-#                f.seek(offset,os.SEEK_SET)
-#                self.NumPart_Total=np.fromfile(f,dtype=np.int32,count=6)
-#    
-#                offset+=28
-#                f.seek(offset,os.SEEK_SET)
-#                self.NumFiles=np.fromfile(f,dtype=np.int32,count=1)[0]
-#
-#                offset+=4
-#                f.seek(offset,os.SEEK_SET)
-#                self.BoxSize=np.fromfile(f,dtype=np.float64,count=1)[0]
-#
-#                offset+=8
-#                f.seek(offset,os.SEEK_SET)
-#                self.Omega0=np.fromfile(f,dtype=np.float64,count=1)[0]
-#
-#                offset+=8
-#                f.seek(offset,os.SEEK_SET)
-#                self.OmegaLambda=np.fromfile(f,dtype=np.float64,count=1)[0]
-#
-#                offset+=8
-#                f.seek(offset,os.SEEK_SET)
-#                self.HubbleParam=np.fromfile(f,dtype=np.float64,count=1)[0]
-#
-#                if self.NumFiles>1:
-#                    print('Data is split across %d files'%self.NumFiles)
-#            f.close()
-#
-#            idx_with_mass=np.where(self.MassTable==0)[0]    # Want to know which species are in the mass block, so
-#                                                            # their MassTable entries will be zero
-#            NumPart=np.sum(self.NumPart_Total)
-#            print('Number of particles: %010d'%NumPart)
-#            NumPart_InMassBlock=np.sum(self.NumPart_Total[idx_with_mass])
-#            print('Number of particles in mass block: %010d'%NumPart_InMassBlock)
-#            
-#            self.pos=np.ndarray(shape=(NumPart,3))
-#            self.vel=np.ndarray(shape=(NumPart,3))
-#            if self.pids_type==32:
-#                self.pids=np.ndarray(shape=(NumPart),dtype=np.uint32)
-#            else:
-#                self.pids=np.ndarray(shape=(NumPart),dtype=np.uint64)
-#            self.mass=np.ndarray(shape=(NumPart))
-#            
-#            if self.NumPart_Total[0]>0:
-#                self.u=np.ndarray(shape=(self.NumPart_Total[0]))
-#                self.rho=np.ndarray(shape=(self.NumPart_Total[0]))
-#            
-#            blocknames=self.GetBlockNames()
-#
-#            isstellarage=False
-#            ismetallicity=False
-#            issfr=False
-#            ispotential=False
-#            
-#            if len(self.extra_blocks)>0:
-#                print('Loading extra blocks: %s'%self.extra_blocks)
-#                if 'AGE' in self.extra_blocks:
-#                    self.stellarage=np.ndarray(shape=(self.NumPart_Total[self.star_type]))
-#                    isstellarage=True
-#                if 'Z' in self.extra_blocks:
-#                    self.gas_metallicity=np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-#                    self.stellar_metallicity=np.ndarray(shape=(self.NumPart_Total[self.star_type]))
-#                    ismetallicity=True
-#                if 'SFR' in self.extra_blocks:
-#                    self.gas_sfr=np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-#                    issfr=True
-#                if 'POT' in self.extra_blocks:
-#                    self.potential=np.ndarray(shape=(NumPart))
-#                    ispotential=True
-#
-#            istart=np.zeros(self.NumPartType,dtype=np.uint64)
-#            istart[1:]=np.cumsum(self.NumPart_Total[:-1])
-#            ifinish=np.copy(istart)
-#
-#            for ifile in range(self.NumFiles):
-#                if ifile>0:
-#                    filename=fileroot+'.%d'%ifile
-#                with open(filename,'rb') as f:
-#                    offset=0
-#                    if self.snapfileformat=='SNAP2':
-#                        offset+=16
-#                    offset+=4
-#                    f.seek(offset,os.SEEK_SET)
-#                    NumPartInThisFile=np.fromfile(f,dtype=np.int32,count=6)
-#
-#                    NumPartInFile=np.sum(NumPartInThisFile)
-#
-#                    NumPart_InMassBlock_InFile=np.sum(NumPartInThisFile[idx_with_mass])
-#                    
-#                    if self.NumFiles>1:
-#                        print('Reading %010d particles from %s'%(NumPartInFile,filename))
-#                        print('Number of particles in mass block: %010d'%NumPart_InMassBlock_InFile)
-#
-#                    offset=264   # includes 2 x 4 byte buffers
-#
-#                    if self.snapfileformat=='SNAP2':
-#                        offset+=16
-#
-#                    offset+=4    # 1st 4 byte buffer
-#                    
-#                    if self.snapfileformat=='SNAP2':
-#                        offset+=16
-#
-#                    f.seek(offset,os.SEEK_SET)
-#                    
-#                    pos_block=np.fromfile(f,dtype=np.float32,count=3*NumPartInFile)
-#
-#                    # Increment beyond the POS block
-#                    offset+=3*NumPartInFile*4
-#                    offset+=4   # 2nd 4 byte buffer
-#
-#                    # Open the VEL block
-#                    offset+=4   # 1st 4 byte buffer
-#                    if self.snapfileformat=='SNAP2':
-#                        offset+=16
-#
-#                    f.seek(offset,os.SEEK_SET)
-#                    
-#                    vel_block=np.fromfile(f,dtype=np.float32,count=3*NumPartInFile)
-#
-#                    # Increment beyond the VEL block
-#                    offset+=3*NumPartInFile*4
-#                    offset+=4   # 2nd 4 byte buffer
-#
-#                    # Open the IDS block
-#                    offset+=4   # 1st 4 byte buffer
-#                    if self.snapfileformat=='SNAP2':
-#                        offset+=16
-#
-#                    f.seek(offset,os.SEEK_SET)
-#
-#                    if self.pids_type==32:
-#                        pids_block=np.fromfile(f,dtype=np.uint32,count=NumPartInFile)
-#                        num_bytes=4
-#                    else:
-#                        pids_block=np.fromfile(f,dtype=np.uint64,count=NumPartInFile)
-#                        num_bytes=8
-#                   # Increment beyond the IDs block
-#                    offset+=NumPartInFile*num_bytes
-#                    offset+=4   # 2nd 4 byte buffer
-#
-#                    if NumPart_InMassBlock_InFile>0:
-#                        # Open the mass block
-#                        offset+=4   # 1st 4 byte buffer
-#                        if self.snapfileformat=='SNAP2':
-#                            offset+=16
-#
-#                        f.seek(offset,os.SEEK_SET)
-#
-#                        mass_block=np.fromfile(f,dtype=np.float32,count=NumPart_InMassBlock_InFile)
-#
-#                        # Increment beyond the mass block
-#                        offset+=NumPart_InMassBlock_InFile*4
-#                        offset+=4   # 2nd 4 byte buffer
-#
-#                    if NumPartInThisFile[0]>0:
-#                        # Open the mass block
-#                        offset+=4   # 1st 4 byte buffer
-#                        if self.snapfileformat=='SNAP2':
-#                            offset+=16
-#
-#                        f.seek(offset,os.SEEK_SET)
-#
-#                        u_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
-#                        
-#                       # Increment beyond the mass block
-#                        offset+=NumPartInThisFile[0]*4
-#                        offset+=4   # 2nd 4 byte buffer
-#
-#                        # Open the mass block
-#                        offset+=4   # 1st 4 byte buffer
-#                        if self.snapfileformat=='SNAP2':
-#                            offset+=16
-#
-#                        f.seek(offset,os.SEEK_SET)
-#
-#                        rho_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
-#
-#                        if ismetallicity==True:
-#                            offset=blocknames['Z']+20
-#                            f.seek(offset,os.SEEK_SET)
-#                            gas_metals_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
-#                            offset+=4*NumPartInThisFile[0]
-#                            f.seek(offset,os.SEEK_SET)
-#                            stellar_metals_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.star_type])
-#                            
-#                        if isstellarage==True:
-#                            offset=blocknames['AGE']+20
-#                            f.seek(offset,os.SEEK_SET)
-#                            stellarage_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.star_type])
-#
-#                        if issfr==True:
-#                            offset=blocknames['SFR']+20
-#                            f.seek(offset,os.SEEK_SET)
-#                            gas_sfr_block=np.fromfile(f,dtype=np.float32,count=NumPartInThisFile[self.gas_type])
-#
-#                    if ispotential==True:
-#                        offset=blocknames['POT']+20
-#                        f.seek(offset,os.SEEK_SET)
-#                        potential_block=np.fromfile(f,dtype=np.float32,count=NumPartInFile)
-#
-#                    ifinish=istart+NumPartInThisFile.astype(np.uint64)
-#                    
-#                    astart=0
-#                    bstart=0
-#                    cstart=0
-#                    for itype in range(self.NumPartType):
-#                        if NumPartInThisFile[itype]>0:
-#                            afinish=astart+3*NumPartInThisFile[itype]
-#                            bfinish=bstart+NumPartInThisFile[itype]
-#                            self.pos[istart[itype]:ifinish[itype]]=pos_block[astart:afinish].reshape(NumPartInThisFile[itype],3)
-#                            self.vel[istart[itype]:ifinish[itype]]=vel_block[astart:afinish].reshape(NumPartInThisFile[itype],3)
-#                            self.pids[istart[itype]:ifinish[itype]]=pids_block[bstart:bfinish]
-#                            if np.isin(itype,idx_with_mass)==True:
-#                                cfinish=cstart+NumPartInThisFile[itype]
-#                                self.mass[istart[itype]:ifinish[itype]]=mass_block[cstart:cfinish]
-#                                cstart=cfinish
-#                            else:
-#                                self.mass[istart[itype]:ifinish[itype]]=self.MassTable[itype]*np.ones(NumPartInThisFile[itype])
-#
-#                            if ispotential==True:
-#                                self.potential[istart[itype]:ifinish[itype]]=potential_block[bstart:bfinish]
-#
-#                            if NumPartInThisFile[0]>0:
-#                                self.u[istart[itype]:ifinish[itype]]=u_block[bstart:bfinish]
-#                                if rho_block.size>0:
-#                                    self.rho[istart[itype]:ifinish[itype]]=rho_block[bstart:bfinish]
-#                                if ismetallicity==True:
-#                                    self.gas_metallicity[istart[itype]:ifinish[itype]]=gas_metals_block[bstart:bfinish]
-#                                if issfr==True:
-#                                    self.gas_sfr[istart[itype]:ifinish[itype]]=gas_sfr_block[bstart:bfinish]
-#
-#                            if NumPartInThisFile[self.star_type]>0:
-#                                if ismetallicity==True:
-#                                    self.stellar_metallicity[istart[itype]:ifinish[itype]]=stellar_metals_block[bstart:bfinish]
-#                                if isstellarage==True:
-#                                    self.stellarage[istart[itype]:ifinish[itype]]=stellarage_block[bstart:bfinish]
-#                                
-#                            astart=afinish
-#                            bstart=bfinish
-##                            SingleOffsetFinish[itype]=SingleOffsetStart[itype]+self.NumPart_ThisFile[itype]
-##                            TripleOffsetFinish[itype]=TripleOffsetStart[itype]+3*self.NumPart_ThisFile[itype]
-##                            self.pos[istart[itype]:ifinish[itype]]=pos_block[TripleOffsetStart[itype]:TripleOffsetFinish[itype]].reshape(self.NumPart_ThisFile[itype],3)
-##                            self.vel[istart[itype]:ifinish[itype]]=vel_block[TripleOffsetStart[itype]:TripleOffsetFinish[itype]].reshape(self.NumPart_ThisFile[itype],3)
-##                            self.pids[istart[itype]:ifinish[itype]]=pids_block[SingleOffsetStart[itype]:SingleOffsetFinish[itype]]
-#                    istart=ifinish
-##                            SingleOffsetStart[itype]=SingleOffsetFinish[itype]
-##                            TripleOffsetStart[itype]=TripleOffsetFinish[itype]
-#
-##                    # Increment beyond the IDS block
-##                    offset+=NumPart*8
-##                    offset+=4   # 2nd 4 byte buffer
-##
-##                    offset+=4   # 1st 4 byte buffer
-##                    if self.snapfileformat=='SNAP2':
-##                    offset+=16
-##
-##                    f.seek(offset,os.SEEK_SET)
-##
-##                    TypeOffsetStart=np.zeros(self.NumPartType,dtype=np.uint64)
-##                    TypeOffset=0
-##                    for i in range(1,self.NumPartType):
-##                        TypeOffset+=self.NumPart_ThisFile[i-1]
-##                        if self.NumPart_ThisFile[i]>0:
-##                            TypeOffsetStart[i]=TypeOffset
-##                    print(TypeOffsetStart)
-##                    print(self.NumPart_ThisFile)
-##                    TypeOffsetFinish=np.copy(TypeOffsetStart)
-##
-##                    pids_block=np.fromfile(f,dtype=np.uint64,count=NumPart)
-##
-##                    for itype in range(self.NumPartType):
-##                        if self.NumPart_ThisFile[itype]>0:
-##                            ifinish[itype]=istart[itype]+self.NumPart_ThisFile[itype]
-##                            TypeOffsetFinish[itype]=TypeOffsetStart[itype]+self.NumPart_ThisFile[itype]
-##                            self.pids[istart[itype]:ifinish[itype]]=pids_block[TypeOffsetStart[itype]:TypeOffsetFinish[itype]].reshape(self.NumPart_ThisFile[itype],3)
-##                            istart[itype]=ifinish[itype]
-##                            TypeOffsetStart[itype]=TypeOffsetFinish[itype]
-##
-    def GetBlockNames(self):
-        fileroot=self.snapfilename
-        self.blocknames={}
-
-        if self.snapfileformat=='HDF5' or self.snapfileformat=='3':
-            print('HELLO')
-        else:
-            if self.snapfileformat!='SNAP2':
-                return
+        
+        try:
+            if self.snapfileformat == "HDF5":
+                reader = read_hdf5()
+                self._transfer_attributes_to_reader(reader)
+                reader.read_hdf5_snapshot(snapfilename=self.snapfilename,convention=self.convention)
+                self._transfer_attributes_from_reader(reader)
+            else:
+                reader = read_binary(self.snapfilename)
+                self._transfer_attributes_to_reader(reader)
+                reader.read_binary_snapshot()
+                self._transfer_attributes_from_reader(reader)
                 
-            filename=fileroot
-            
-            if os.path.exists(filename)==False:
-                filename=fileroot+'.0'
+        except Exception as e:
+            logging.error(f"Error reading snapshot {self.snapfilename}: {e}")
+            raise
+        
+        return self
+        
+    def write_snapshot(self, filename: str,
+                             idx: np.int32,
+                             idx_type: np.int64,
+                             file_format: str = "hdf5",
+                             convention: str = "SWIFT",
+                       ) -> None:
+        """
+        Write snapshot data to file in the chosen format.
+
+        Parameters
+        ----------
+        filename : str
+            Path to the output file.
+        file_format : str, optional
+            File format to use. Currently supports "hdf5".
+        """
+        if file_format.lower() == "hdf5":
+            writer = write_hdf5(output_convention=convention, idx=idx, idx_type=idx_type)
+            self._transfer_attributes_to_writer(writer)
+            """
+            Options are: pos, vel, pids, mass, u, rho, hsml, gas_Z, stellar_Z,
+                         sfr, age, initmass
+            """
+            self._transfer_datasets_to_writer(writer,
+                                              ['pos',
+                                               'vel',
+                                               'pids',
+                                               'mass'
+                                               ])
+            writer.write_hdf5_snapshot(filename)
+        else:
+            raise ValueError(f"Unsupported snapshot format: {file_format}")
+
+    def ParticleOffsetsByType(self,NumPartByType):
+        """
+        Return offsets of particle species by type
+        """
+        return np.concatenate([[0],np.cumsum(NumPartByType)],dtype=np.int64)
     
-            with open(filename, mode='rb') as f:
-                fileContent = f.read()
-                offset=0
-                filesize_in_bytes=len(fileContent)
-                for i in range(20):
-                    a=struct.unpack("issssii", fileContent[offset:offset+16])
-                    aaa=[aa.decode('utf-8') for aa in a[1:5]]
-                    tag="".join(aaa)
-                    blocksize=a[5]
-                    if a[0]!=a[6]:
-                        print("Error")
-                    self.blocknames[tag.strip()]=offset
-                    offset+=2*4+a[0]+blocksize
-                    if filesize_in_bytes-offset==0:
-                        break
-        return self.blocknames
+    def LoadParticlesByType(self, part_type: str = 'all'):
+        """
+        Load particles into separate objects by type.
         
-    def LoadParticlesByType(self,part_type='all'):
-        isgas=np.sum(self.NumPart_Total[:self.gas_type])
-        ifgas=np.sum(self.NumPart_Total[:self.gas_type+1])
-        isdm=np.sum(self.NumPart_Total[:self.dm_type])
-        ifdm=np.sum(self.NumPart_Total[:self.dm_type+1])
-        isstar=np.sum(self.NumPart_Total[:self.star_type])
-        ifstar=np.sum(self.NumPart_Total[:self.star_type+1])
-        isbh=np.sum(self.NumPart_Total[:self.bh_type])
-        ifbh=np.sum(self.NumPart_Total[:self.bh_type+1])
-
-        loadgas=False
-        loaddm=True
-        loadstar=False
-        loadbh=False
-
-        if part_type=='all':
-            if ifgas-isgas>0:
-                loadgas=True
-            if ifstar-isstar>0:
-                loadstar=True
-            if ifbh-isbh>0:
-                loadbh=True
-        if part_type=='gas':
-            if ifgas-isgas>0:
-                loadgas=True
-            loaddm=False
-        if part_type=='star':
-            if ifstar-isstar>0:
-                loadstar=True
-            loaddm=False
-        if part_type=='bh':
-            if ifbh-isbh>0:
-                loadbh=True
-            loaddm=False
-            
-        if self.ispotential==False:
-            self.potential=np.zeros(shape=(np.sum(self.NumPart_Total)),dtype=np.float32)
+        Parameters
+        ----------
+        part_type : str
+            Which particle types to load. Options: 'all', 'gas', 'star', 'bh'
+        """
+        if not hasattr(self, 'pos') or not hasattr(self, 'NumPart_Total'):
+            raise RuntimeError("No data loaded. Call read() first.")
         
-        if loadgas==True:
-            self.gas=self.ParticleProperties(self.pos[isgas:ifgas],
-                                        self.vel[isgas:ifgas],
-                                        self.pids[isgas:ifgas],
-                                        self.mass[isgas:ifgas],
-                                        self.potential[isgas:ifgas],
-                                        internal_energy=self.u[isgas:ifgas],
-                                        density=self.rho[isgas:ifgas])
-
-        if loaddm==True:
-            self.dm=self.ParticleProperties(self.pos[isdm:ifdm],
-                                        self.vel[isdm:ifdm],
-                                        self.pids[isdm:ifdm],
-                                        self.mass[isdm:ifdm],
-                                        self.potential[isdm:ifdm])
-                                        
-
-        if loadstar==True:
-            self.star=self.ParticleProperties(self.pos[isstar:ifstar],
-                                        self.vel[isstar:ifstar],
-                                        self.pids[isstar:ifstar],
-                                        self.mass[isstar:ifstar],
-                                        self.potential[isstar:ifstar])
+        # Calculate offsets for each particle type
+        offsets = self._calculate_particle_offsets()
         
-        if loadbh==True:
-            self.bh=self.ParticleProperties(self.pos[isbh:ifbh],
-                                        self.vel[isbh:ifbh],
-                                        self.pids[isbh:ifbh],
-                                        self.mass[isbh:ifbh],
-                                        self.potential[isbh:ifbh])
-
+        # Determine which types to load
+        load_flags = self._determine_load_flags(part_type, offsets)
         
-    def AddGasParticles(self,OmegaBar=0.0491,frac_offset=0.25):
-        if self.NumPart_Total[0]>0:
-            print('Error! Gas particles already present.')
-            return
-            
-        self.OmegaBar=0.0491
-        fg=self.OmegaBar/self.Omega0
-        fd=1.-fg
+        # Initialize potential array if needed
+        if not hasattr(self, 'potential') or self.potential is None:
+            self.potential = np.zeros(shape=(np.sum(self.NumPart_Total)), dtype=np.float32)
         
-        mean_interparticle_separation=(self.mass[0]/self.Omega0/RHOCRIT0)**(1./3.)
+        # Load particle data for each requested type
+        if load_flags['gas']:
+            self.gas = self._create_particle_object('gas', offsets)
         
-        print('Mean interparticle separation: %lf [Lbox]'%(mean_interparticle_separation/self.BoxSize))
-
-        # Revise the numbers of particles in the header
-        self.NumPart_Total[0]=self.NumPart_Total[1]
-        self.NumPart=np.sum(self.NumPart_Total)
+        if load_flags['dm']:
+            self.dm = self._create_particle_object('dm', offsets)
         
-        new_pos=np.ndarray(shape=(np.sum(self.NumPart_Total),3),dtype=np.float32)
-        new_vel=np.ndarray(shape=(np.sum(self.NumPart_Total),3),dtype=np.float32)
-   
-        # First create gas particles
-        new_pos[:self.NumPart_Total[0],:]=(self.pos[:self.NumPart_Total[1]]-fd*frac_offset*mean_interparticle_separation*np.ones(3))
-        new_vel[:self.NumPart_Total[0],:]=self.vel[:self.NumPart_Total[1]]
-        self.u=np.ones(self.NumPart_Total[0])*100
-        self.smoothinglength=np.ones(self.NumPart_Total[0])*mean_interparticle_separation
-
-        # ... then modify dark matter particles
-        new_pos[self.NumPart_Total[0]:self.NumPart_Total[0]+self.NumPart_Total[1],:]=self.pos[:self.NumPart_Total[1]]-frac_offset*mean_interparticle_separation*np.ones(3)
-        new_vel[self.NumPart_Total[0]:self.NumPart_Total[0]+self.NumPart_Total[1],:]=self.vel[:self.NumPart_Total[1]]
-
-        new_pos[self.NumPart_Total[0]+self.NumPart_Total[1]:,:]=self.pos[self.NumPart_Total[1]:]
-        new_vel[self.NumPart_Total[0]+self.NumPart_Total[1]:,:]=self.vel[self.NumPart_Total[1]:]
-
-        self.pos=new_pos
-        self.vel=new_vel
+        if load_flags['star']:
+            self.star = self._create_particle_object('star', offsets)
         
-        self.mass=np.concatenate([self.mass[:self.NumPart_Total[1]],self.mass])
-        mass_mask=np.concatenate([np.ones(self.NumPart_Total[0])*fg,np.ones(self.NumPart_Total[1])*fd])
-        mass_mask=np.concatenate([mass_mask,np.ones(self.NumPart-np.sum(self.NumPart_Total[:2]))])
-        self.mass=self.mass*mass_mask
+        if load_flags['bh']:
+            self.bh = self._create_particle_object('bh', offsets)
     
-        self.pids=np.concatenate([np.arange(self.NumPart_Total[0]),self.pids+self.NumPart_Total[1]])
-
+    def _calculate_particle_offsets(self):
+        """Calculate start/end offsets for each particle type."""
+        offsets = {}
+        
+        offsets['gas'] = {
+            'start': np.sum(self.NumPart_Total[:self.gas_type]),
+            'end': np.sum(self.NumPart_Total[:self.gas_type + 1])
+        }
+        offsets['dm'] = {
+            'start': np.sum(self.NumPart_Total[:self.dm_type]),
+            'end': np.sum(self.NumPart_Total[:self.dm_type + 1])
+        }
+        offsets['star'] = {
+            'start': np.sum(self.NumPart_Total[:self.star_type]),
+            'end': np.sum(self.NumPart_Total[:self.star_type + 1])
+        }
+        offsets['bh'] = {
+            'start': np.sum(self.NumPart_Total[:self.bh_type]),
+            'end': np.sum(self.NumPart_Total[:self.bh_type + 1])
+        }
+        
+        return offsets
+    
+    def _determine_load_flags(self, part_type: str, offsets: Dict):
+        """Determine which particle types should be loaded."""
+        load_flags = {'gas': False, 'dm': True, 'star': False, 'bh': False}
+        
+        if part_type == 'all':
+            for ptype in ['gas', 'star', 'bh']:
+                if offsets[ptype]['end'] - offsets[ptype]['start'] > 0:
+                    load_flags[ptype] = True
+        elif part_type in load_flags:
+            if offsets[part_type]['end'] - offsets[part_type]['start'] > 0:
+                load_flags[part_type] = True
+                load_flags['dm'] = False
+        else:
+            raise ValueError(f"Unknown particle type: {part_type}")
+        
+        return load_flags
+    
+    def _create_particle_object(self, ptype: str, offsets: Dict):
+        """Create a ParticleProperties object for the specified type."""
+        start, end = offsets[ptype]['start'], offsets[ptype]['end']
+        
+        kwargs = {}
+        if ptype == 'gas' and hasattr(self, 'u') and hasattr(self, 'rho'):
+            kwargs['internal_energy'] = self.u[start:end]
+            kwargs['density'] = self.rho[start:end]
+        
+        return self.ParticleProperties(
+            self.pos[start:end],
+            self.vel[start:end],
+            self.pids[start:end],
+            self.mass[start:end],
+            self.potential[start:end],
+            **kwargs
+        )
+    
     class ParticleProperties:
-        def __init__(self,pos,vel,pids,mass,potential,**kwargs):
-            self.pos=pos
-            self.vel=vel
-            self.pids=pids
-            self.mass=mass
-            self.potential=potential
+        """Container for particle data of a specific type."""
+        
+        def __init__(self, pos, vel, pids, mass, potential, **kwargs):
+            self.pos = pos
+            self.vel = vel
+            self.pids = pids
+            self.mass = mass
+            self.potential = potential
+            
+            # Optional gas-specific properties
             if 'internal_energy' in kwargs:
-                self.internal_energy=kwargs.get('internal_energy')
+                self.internal_energy = kwargs['internal_energy']
             if 'density' in kwargs:
-                self.density=kwargs.get('density')
-
-    def UnitConversion(self,**kwargs):
-        if kwargs.get('convert_to_physical')!=None:
-            self.convert_to_physical=kwargs.get('convert_to_physical')
-            if self.convert_to_physical==True:
-                self.pos*=self.ScaleFactor
-                self.BoxSize*=self.ScaleFactor
-        if kwargs.get('convert_to_comoving')!=None:
-            self.convert_to_comoving=kwargs.get('convert_to_comoving')
-            if self.convert_to_comoving==True:
-                self.pos/=self.ScaleFactor
-                self.BoxSize/=self.ScaleFactor
-        if kwargs.get('convert_to_per_littleh')!=None:
-            self.convert_to_per_littleh=kwargs.get('convert_to_per_littleh')
-            if self.convert_to_per_littleh==True:
-                self.pos*=self.HubbleParam
-                self.mass*=self.HubbleParam
-                self.BoxSize*=self.HubbleParam
-        if kwargs.get('convert_to_littleh')!=None:
-            self.convert_to_littleh=kwargs.get('convert_to_littleh')
-            if self.convert_to_littleh==True:
-                self.pos/=self.HubbleParam
-                self.mass/=self.HubbleParam
-                self.BoxSize/=self.HubbleParam
-
-    def WriteSnapshot(self,output_file,sim_type,npart_type,masstable_type,idx,idx_type,**kwargs):
-        '''
-        Write data to a single snapshot.
-        output_file - the snapshot to write to
-        sim_type - choices are SWIFT, GADGET4, or everything else
-        npart_type - number of particles in file by type
-        masstable_type - masses of particles in mass table by type
-        idx - 
-        idx_type -
-        selection - 6 element array containing centre, velocity, and size
-        periodic - boolean
-        ICs - boolean
-        NameOfMassBlock - string
-        '''
-        filename=output_file+'.hdf5'
-        print('Writing data to %s'%filename)
-
-        with h5py.File(filename, 'w') as f:
-            header = f.create_group('Header')
-            base_attrs = {
-                'NumFilesPerSnapshot': self.NumFiles,
-                'NumPart_Total': npart_type,
-                'NumPart_Total_HighWord': np.zeros(6, dtype=np.int32),
-                'Flag_Entropy_ICs': 1,
-                'MassTable': self.MassTable,
-            }
-            header.attrs.update(base_attrs)
-
-            if sim_type == 'SWIFT':
-                cosmo = f.create_group('Cosmology')
-                header.attrs.update({
-                    'Scale-factor': getattr(self,'ScaleFactor',1.),
-                    'BoxSize': np.full(3, getattr(self,'BoxSize',0.)),
-                    'Dimension': 3,
-                })
-                cosmo.attrs.update({
-                    'Omega_cdm': getattr(self,'OmegaDM',0.255),
-                    'Omega_b': getattr(self,'OmegaBar',0.045),
-                    'Omega_lambda': getattr(self,'Omega_lambda',0.7),
-                    'h': getattr(self,'HubbleParam',0.7),
-                })
-
-            elif sim_type in ['GADGET4', 'AREPO']:
-                params = f.create_group('Parameters')
-                header.attrs.update({
-                    'Time': getattr(self,'ScaleFactor',1.),
-                    'BoxSize': getattr(self,'BoxSize',0.),
-                })
-                params.attrs.update({
-                    'Omega0': getattr(self,'Omega0',0.3),
-                    'OmegaLambda': getattr(self,'OmegaLambda',0.7),
-                    'HubbleParam': getattr(self,'HubbleParam',0.7),
-                })
-
-            else:  # GADGET2/3 fallback
-                redshift = 0.0 if self.ScaleFactor <= 0 else 1. / self.ScaleFactor - 1.
-                header.attrs.update({
-                    'Time': getattr(self,'ScaleFactor',1.),
-                    'Redshift': redshift,
-                    'BoxSize': getattr(self,'BoxSize',0.),
-                    'Omega0': getattr(self,'Omega0',0.3),
-                    'OmegaLambda': getattr(self,'OmegaLambda',0.7),
-                    'HubbleParam': getattr(self,'HubbleParam',0.7),
-                    'NumPart_ThisFile': npart_type,
-                    'Flag_Cooling': 0,
-                    'Flag_StellarAge': 0,
-                    'Flag_Sfr': 0,
-                    'Flag_Metals': 0,
-                    'Flag_Feedback': 0,
-                    'Flag_DoublePrecision': 0,
-                })
-
-            # Optional kwargs
-            selection = kwargs.get('selection')
-            if selection is not None:
-                header.attrs.update({
-                    'Halo Centre': selection[0:3],
-                    'Halo Systemic Velocity': selection[4:6],
-                    'Halo Extent': selection[6],
-                })
-
-            header.attrs['RunLabel'] = kwargs.get('RunLabel', sim_type)
-            header.attrs['Periodic'] = 0 if kwargs.get('periodic') is False else 1
-
-            isics = bool(kwargs.get('ICs', False))
-
-            NameOfMassBlock = kwargs.get('NameOfMassBlock', 'Masses')
-
-            NumPart = np.sum(npart_type)
-            NumPartType = npart_type.size
-            print(f'Number of particles: {NumPart:010d}')
-            print(f'Number of particle types: {NumPartType}')
-
-            idx_with_mass = np.where(masstable_type > 0)[0]
-            NumPart_InMassBlock = np.sum(npart_type[idx_with_mass])
-            if NumPart_InMassBlock > 0:
-                print(f'Number of particles in mass block: {NumPart_InMassBlock:010d}')
-
-#        with h5py.File(filename,'w') as f:
-#            header=f.create_group('Header')
-#            header.attrs['NumFilesPerSnapshot']=self.NumFiles
-#            header.attrs['NumPart_Total']=npart_type
-#            header.attrs['NumPart_Total_HighWord']=np.zeros(6,dtype=np.int32)
-#            header.attrs['Flag_Entropy_ICs']=int(1)
-#            header.attrs['MassTable']=self.MassTable
-#            
-#            if sim_type=='SWIFT':
-#                cosmo=f.create_group('Cosmology')
-#                header.attrs['Scale-factor']=self.ScaleFactor
-#                header.attrs['BoxSize']=self.BoxSize*np.ones(3)
-#                header.attrs['MassTable']=self.MassTable
-#                header.attrs['Dimension']=3
-#                cosmo.attrs['Omega_cdm']=self.OmegaDM
-#                cosmo.attrs['Omega_b']=self.OmegaBar
-#                cosmo.attrs['Omega_lambda']=self.OmegaLambda
-#                cosmo.attrs['h']=self.HubbleParam
-#            elif sim_type in ['GADGET4', 'AREPO']:
-#                params=f.create_group('Parameters')
-#                header.attrs['Time']=self.ScaleFactor
-#                header.attrs['BoxSize']=self.BoxSize
-#                params.attrs['Omega0']=self.Omega0
-#                params.attrs['OmegaLambda']=self.OmegaLambda
-#                params.attrs['HubbleParam']=self.HubbleParam
-#            else:
-#                header.attrs['Time']=self.ScaleFactor
-#                if self.ScaleFactor<=0.0:
-#                    redshift=0.0
-#                else:
-#                    redshift=1./self.ScaleFactor-1.
-#                header.attrs['Redshift']=redshift
-#                header.attrs['BoxSize']=self.BoxSize
-#                header.attrs['Omega0']=self.Omega0
-#                header.attrs['OmegaLambda']=self.OmegaLambda
-#                header.attrs['HubbleParam']=self.HubbleParam
-#                header.attrs['NumPart_ThisFile']=npart_type
-#                header.attrs['Flag_Cooling']=int(0)
-#                header.attrs['Flag_StellarAge']=int(0)
-#                header.attrs['Flag_Sfr']=int(0)
-#                header.attrs['Flag_Metals']=int(0)
-#                header.attrs['Flag_Feedback']=int(0)                
-#                header.attrs['Flag_DoublePrecision']=int(0)
-#
-#            if kwargs.get('selection')!=None:
-#                header.attrs['Halo Centre']=kwargs.get('selection')[0:3]
-#                header.attrs['Halo Systemic Velocity']=kwargs.get('selection')[4:6]
-#                header.attrs['Halo Extent']=kwargs.get('selection')[6]
-#
-#            RunLabel=sim_type
-#            if kwargs.get('RunLabel')!=None:
-#                RunLabel=kwargs.get('RunLabel')
-#
-#            header.attrs['RunLabel']=RunLabel
-#
-#            iperiodic=1
-#            if kwargs.get('periodic')!=None:
-#                if kwargs.get('periodic')==False:
-#                    iperiodic=0
-#            header.attrs['Periodic']=iperiodic
-#            
-#            isics=False
-#            if kwargs.get('ICs')!=None:
-#                if kwargs.get('ICs')==True:
-#                    isics=True
-#
-#            NameOfMassBlock='Masses'
-#            if kwargs.get('NameOfMassBlock')!=None:
-#                NameOfMassBlock=kwargs.get('NameOfMassBlock')
-#            NumPart=np.sum(npart_type)
-#            NumPartType=npart_type.size
-#            print('Number of particles: %010d'%NumPart)
-#            print('Number of particle types: %d'%NumPartType)
-#            idx_with_mass=np.where(masstable_type>0)[0]
-#            NumPart_InMassBlock=np.sum(npart_type[idx_with_mass])
-#            if NumPart_InMassBlock>0:
-#                print('Number of particles in mass block: %010d'%NumPart_InMassBlock)
-#            
-            for i in range(NumPartType):
-                if npart_type[i]>0:
-                    group=f.create_group('PartType%d'%i)
-                    
-                    # Positions block
-                    data_pos=group.create_dataset('Coordinates',data=self.pos[idx][idx_type[i]:idx_type[i+1]])
-                    data_pos.attrs['CGSConversionFactor']=self.unit_length_in_cgs
-                    data_pos.attrs['aexp-scale-exponent']=1
-                    data_pos.attrs['h-scale-exponent']=-1
-
-                    # Velocity block
-                    data_vel=group.create_dataset('Velocities',data=self.vel[idx][idx_type[i]:idx_type[i+1]])
-                    data_vel.attrs['CGSConversionFactor']=self.unit_velocity_in_cgs
-                    data_vel.attrs['aexp-scale-exponent']=0.5
-                    data_vel.attrs['h-scale-exponent']=0
-
-                    # Particle IDs block
-                    data_pids=group.create_dataset('ParticleIDs',data=self.pids[idx][idx_type[i]:idx_type[i+1]])
-                    data_pids.attrs['CGSConversionFactor']=1
-                    data_pids.attrs['aexp-scale-exponent']=0
-                    data_pids.attrs['h-scale-exponent']=0
-
-                    # Mass block
-                    data_mass=group.create_dataset(NameOfMassBlock,data=self.mass[idx][idx_type[i]:idx_type[i+1]])
-                    data_mass.attrs['CGSConversionFactor']=self.unit_mass_in_cgs
-                    data_mass.attrs['aexp-scale-exponent']=0
-                    data_mass.attrs['h-scale-exponent']=-1
-
-                    if i==0:
-                        # Internal energies block
-                        data_u=group.create_dataset('InternalEnergy',data=self.u[0:idx_type[1]])
-                        data_u.attrs['CGSConversionFactor']=self.unit_velocity_in_cgs**2
-                        data_u.attrs['aexp-scale-exponent']=0
-                        data_u.attrs['h-scale-exponent']=0
-                        
-                        # Smoothing length block
-                        data_smoothinglength=group.create_dataset('SmoothingLength',data=self.smoothinglength[0:idx_type[1]])
-                        data_smoothinglength.attrs['CGSConversionFactor']=self.unit_length_in_cgs
-                        data_smoothinglength.attrs['aexp-scale-exponent']=1
-                        data_smoothinglength.attrs['h-scale-exponent']=-1
-                        
-                        if isics==True:
-                            continue
-
-                        # Density block
-                        data_density=group.create_dataset('Density',data=self.rho[0:idx_type[1]])
-                        data_density.attrs['CGSConversionFactor']=self.unit_density_in_cgs
-                        data_density.attrs['aexp-scale-exponent']=3
-                        data_density.attrs['h-scale-exponent']=2
-
-                        # Smoothing length block
-                        data_smoothinglength=group.create_dataset('SmoothingLength',data=self.smoothinglength[0:idx_type[1]])
-                        data_smoothinglength.attrs['CGSConversionFactor']=self.unit_length_in_cgs
-                        data_smoothinglength.attrs['aexp-scale-exponent']=1
-                        data_smoothinglength.attrs['h-scale-exponent']=-1
-
-                        # Gas metals block
-                        data_gas_metals=group.create_dataset('Metallicity',data=self.gas_metallicity[0:idx_type[1]])
-                        data_gas_metals.attrs['CGSConversionFactor']=1
-                        data_gas_metals.attrs['aexp-scale-exponent']=0
-                        data_gas_metals.attrs['h-scale-exponent']=-0
-                        
-                        # Star formation rate block
-                        data_gas_sfr=group.create_dataset('StarFormationRate',data=self.gas_sfr[0:idx_type[1]])
-                        data_gas_sfr.attrs['CGSConversionFactor']=self.unit_sfr_in_cgs
-                        data_gas_sfr.attrs['aexp-scale-exponent']=0
-                        data_gas_sfr.attrs['h-scale-exponent']=0
-
-                    if i==4:
-                        # Stellar metals block
-                        data_stellar_metals=group.create_dataset('Metallicity',data=self.stellar_metallicity[idx_type[i]:idx_type[i+1]])
-                        data_stellar_metals.attrs['CGSConversionFactor']=1
-                        data_stellar_metals.attrs['aexp-scale-exponent']=0
-                        data_stellar_metals.attrs['h-scale-exponent']=0
-
-                        # Stellar age block
-                        data_stellar_age=group.create_dataset('StellarFormationTime',data=self.stellarage[idx_type[i]:idx_type[i+1]])
-                        data_stellar_age.attrs['CGSConversionFactor']=1
-                        data_stellar_age.attrs['aexp-scale-exponent']=0
-                        data_stellar_age.attrs['h-scale-exponent']=0
-
-                        # Stellar age block
-                        data_stellar_initmass=group.create_dataset('StellarInitMass',data=self.stellarinitmass[idx_type[i]:idx_type[i+1]])
-                        data_stellar_initmass.attrs['CGSConversionFactor']=self.unit_mass_in_cgs
-                        data_stellar_initmass.attrs['aexp-scale-exponent']=0
-                        data_stellar_initmass.attrs['h-scale-exponent']=-1
+                self.density = kwargs['density']
+    
+    def UnitConversion(self, **kwargs):
+        """
+        Apply unit conversions to the data.
+        
+        Parameters
+        ----------
+        convert_to_physical : bool, optional
+            Convert from comoving to physical coordinates
+        convert_to_comoving : bool, optional
+            Convert from physical to comoving coordinates
+        convert_to_per_littleh : bool, optional
+            Convert to units per little h
+        convert_to_littleh : bool, optional
+            Convert from units per little h
+        """
+        if not hasattr(self, 'pos') or not hasattr(self, 'ScaleFactor'):
+            raise RuntimeError("No data loaded or missing cosmological parameters")
+        
+        if kwargs.get('convert_to_physical'):
+            self.pos *= self.ScaleFactor
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize *= self.ScaleFactor
+        
+        if kwargs.get('convert_to_comoving'):
+            self.pos /= self.ScaleFactor
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize /= self.ScaleFactor
+        
+        if kwargs.get('convert_to_per_littleh'):
+            self.pos *= self.HubbleParam
+            if hasattr(self, 'mass'):
+                self.mass *= self.HubbleParam
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize *= self.HubbleParam
+        
+        if kwargs.get('convert_to_littleh'):
+            self.pos /= self.HubbleParam
+            if hasattr(self, 'mass'):
+                self.mass /= self.HubbleParam
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize /= self.HubbleParam
 
 
-## Assume that size is the boxsize if cubic, radius if spherical.
-def select_particles(val,valoffset,size,geometry,**kwargs):
-    dval=val-valoffset
-    # First check for periodicity
-    if kwargs.get('periodic')==True and kwargs.get('scale_length')!=None:
-        scale_length=kwargs.get('scale_length')
-        dval=np.where(dval>0.5*scale_length,dval-scale_length,dval)
-        dval=np.where(dval<-0.5*scale_length,dval+scale_length,dval)
+# Utility functions
+def select_particles(val, valoffset, size, geometry, **kwargs):
+    """
+    Select particles within a specified region.
+    
+    Parameters
+    ----------
+    val : array_like
+        Particle positions
+    valoffset : array_like
+        Center of selection region
+    size : float
+        Size of selection region (box size or radius)
+    geometry : str
+        Selection geometry ('cubic' or 'spherical')
+    **kwargs : dict
+        Additional options (periodic, scale_length, etc.)
+    
+    Returns
+    -------
+    ipick : array_like
+        Indices of selected particles
+    """
+    dval = val - valoffset
+    
+    # Handle periodicity
+    if kwargs.get('periodic') and kwargs.get('scale_length') is not None:
+        scale_length = kwargs['scale_length']
+        dval = np.where(dval > 0.5 * scale_length, dval - scale_length, dval)
+        dval = np.where(dval < -0.5 * scale_length, dval + scale_length, dval)
     else:
-        print('Ignoring periodicity')
-    # Impose cut based on desired geometry
-    if geometry=='cubic':
-        ipick=np.logical_and(np.abs(dval[:,0])<size/2,np.abs(dval[:,1])<size/2)
-        ipick=np.logical_and(ipick,np.abs(dval[:,2])<size/2)
-    elif geometry=='spherical':
-        r2=dval[:,0]**2+dval[:,1]**2+dval[:,2]**2
-        ipick=np.where(r2<size*size)[0]
+        logging.info('Ignoring periodicity')
+    
+    # Apply geometric selection
+    if geometry == 'cubic':
+        ipick = np.logical_and(np.abs(dval[:, 0]) < size/2, np.abs(dval[:, 1]) < size/2)
+        ipick = np.logical_and(ipick, np.abs(dval[:, 2]) < size/2)
+    elif geometry == 'spherical':
+        r2 = dval[:, 0]**2 + dval[:, 1]**2 + dval[:, 2]**2
+        ipick = np.where(r2 < size*size)[0]
     else:
-        print('Undefined geometry')
-        ipick=None
-    if kwargs.get('return_ptype')==True:
-        return ipick,kwargs.get('ptype')[ipick]
+        raise ValueError(f'Unknown geometry: {geometry}')
+    
+    if kwargs.get('return_ptype'):
+        return ipick, kwargs.get('ptype')[ipick]
     else:
         return ipick
+
+
+def place_points_in_mesh(pos, pos_offset, size, mesh_dimension, **kwargs):
+    """
+    Place particles into a mesh grid.
     
-def place_points_in_mesh(pos,pos_offset,size,mesh_dimension,**kwargs):
-    return np.fix(mesh_dimension*(pos-pos_offset)/size)
+    Parameters
+    ----------
+    pos : array_like
+        Particle positions
+    pos_offset : array_like
+        Offset for mesh origin
+    size : float
+        Size of mesh region
+    mesh_dimension : int
+        Number of mesh cells per dimension
     
+    Returns
+    -------
+    array_like
+        Mesh coordinates for each particle
+    """
+    return np.fix(mesh_dimension * (pos - pos_offset) / size)
+
+ 
