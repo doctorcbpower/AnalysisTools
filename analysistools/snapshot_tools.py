@@ -68,9 +68,11 @@ class SnapshotTools:
         self.positions_type = kwargs.get("positions_type", "float32")
         self.pids_type = kwargs.get("pids_type", 32)
         self.not_hires_ptypes = kwargs.get("not_hires_ptypes", [2, 3, 7])
+        self.isics = kwargs.get("isics", False)
         
-        # Set NumPartType for consistency
-        self.NumPartType = 6
+        
+        # Set num_part_type for consistency
+        self.num_part_type = 6
         
         self._set_units()
         
@@ -108,8 +110,8 @@ class SnapshotTools:
         attrs_to_transfer = [
             'gas_type', 'dm_type', 'star_type', 'bh_type', 'convention',
             'positions_only', 'hires_only', 'get_ptypes', 'extra_blocks',
-            'positions_type', 'pids_type', 'not_hires_ptypes', 'NumPartType',
-            'snapfilename'
+            'positions_type', 'pids_type', 'not_hires_ptypes', 'num_part_type',
+            'snapfilename', 'isics',
         ]
         
         for attr in attrs_to_transfer:
@@ -121,7 +123,7 @@ class SnapshotTools:
         attrs_to_transfer = [
             'gas_type', 'dm_type', 'star_type', 'bh_type', 'convention',
             'positions_only', 'hires_only', 'extra_blocks', 'positions_type',
-            'pids_type', 'not_hires_ptypes',
+            'pids_type', 'not_hires_ptypes', 'name_of_mass_block', 'name_of_u_block',
             'unit_length_in_cgs', 'unit_mass_in_cgs', 'unit_velocity_in_cgs',
             'unit_time_in_cgs', 'unit_density_in_cgs', 'unit_sfr_in_cgs',
             'num_part_type', 'num_part_total', 'num_part_this_file', 'mass_table',
@@ -204,6 +206,7 @@ class SnapshotTools:
                              idx_type: np.int64,
                              file_format: str = "hdf5",
                              convention: str = "SWIFT",
+                             blocks_to_write: str = ['pos', 'vel', 'pids', 'mass'],
                        ) -> None:
         """
         Write snapshot data to file in the chosen format.
@@ -222,12 +225,7 @@ class SnapshotTools:
             Options are: pos, vel, pids, mass, u, rho, hsml, gas_Z, stellar_Z,
                          sfr, age, initmass
             """
-            self._transfer_datasets_to_writer(writer,
-                                              ['pos',
-                                               'vel',
-                                               'pids',
-                                               'mass'
-                                               ])
+            self._transfer_datasets_to_writer(writer,blocks_to_write)
             writer.write_hdf5_snapshot(filename)
         else:
             raise ValueError(f"Unsupported snapshot format: {file_format}")
@@ -247,7 +245,7 @@ class SnapshotTools:
         part_type : str
             Which particle types to load. Options: 'all', 'gas', 'star', 'bh'
         """
-        if not hasattr(self, 'pos') or not hasattr(self, 'NumPart_Total'):
+        if not hasattr(self, 'pos') or not hasattr(self, 'num_part_total'):
             raise RuntimeError("No data loaded. Call read() first.")
         
         # Calculate offsets for each particle type
@@ -258,7 +256,7 @@ class SnapshotTools:
         
         # Initialize potential array if needed
         if not hasattr(self, 'potential') or self.potential is None:
-            self.potential = np.zeros(shape=(np.sum(self.NumPart_Total)), dtype=np.float32)
+            self.potential = np.zeros(shape=(np.sum(self.num_part_total)), dtype=np.float32)
         
         # Load particle data for each requested type
         if load_flags['gas']:
@@ -278,20 +276,20 @@ class SnapshotTools:
         offsets = {}
         
         offsets['gas'] = {
-            'start': np.sum(self.NumPart_Total[:self.gas_type]),
-            'end': np.sum(self.NumPart_Total[:self.gas_type + 1])
+            'start': np.sum(self.num_part_total[:self.gas_type]),
+            'end': np.sum(self.num_part_total[:self.gas_type + 1])
         }
         offsets['dm'] = {
-            'start': np.sum(self.NumPart_Total[:self.dm_type]),
-            'end': np.sum(self.NumPart_Total[:self.dm_type + 1])
+            'start': np.sum(self.num_part_total[:self.dm_type]),
+            'end': np.sum(self.num_part_total[:self.dm_type + 1])
         }
         offsets['star'] = {
-            'start': np.sum(self.NumPart_Total[:self.star_type]),
-            'end': np.sum(self.NumPart_Total[:self.star_type + 1])
+            'start': np.sum(self.num_part_total[:self.star_type]),
+            'end': np.sum(self.num_part_total[:self.star_type + 1])
         }
         offsets['bh'] = {
-            'start': np.sum(self.NumPart_Total[:self.bh_type]),
-            'end': np.sum(self.NumPart_Total[:self.bh_type + 1])
+            'start': np.sum(self.num_part_total[:self.bh_type]),
+            'end': np.sum(self.num_part_total[:self.bh_type + 1])
         }
         
         return offsets
@@ -362,7 +360,7 @@ class SnapshotTools:
         convert_to_littleh : bool, optional
             Convert from units per little h
         """
-        if not hasattr(self, 'pos') or not hasattr(self, 'ScaleFactor'):
+        if not hasattr(self, 'pos') or not hasattr(self, 'scale_factor'):
             raise RuntimeError("No data loaded or missing cosmological parameters")
         
         if kwargs.get('convert_to_physical'):

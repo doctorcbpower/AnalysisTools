@@ -154,8 +154,7 @@ class read_hdf5:
         if self.num_part_total[0] > 0 and not self.positions_only:
             self.u = np.ndarray(shape=(self.num_part_total[0]))
             self.rho = np.ndarray(shape=(self.num_part_total[0]))
-            if self.convention != 'Arepo':
-                self.smoothinglength = np.ndarray(shape=(self.num_part_total[0]))
+            self.smoothinglength = np.ndarray(shape=(self.num_part_total[0]))
         
         # Particle type array
         if self.get_ptypes:
@@ -283,12 +282,15 @@ class read_hdf5:
         """Read gas particle specific data."""
         if self.convention == 'SWIFT':
             self.u[istart:ifinish] = f['PartType%d/InternalEnergies' % itype][()]
-            self.rho[istart:ifinish] = f['PartType%d/Densities' % itype][()]
+            if self.isics == False:
+                self.rho[istart:ifinish] = f['PartType%d/Densities' % itype][()]
         else:
             self.u[istart:ifinish] = f['PartType%d/InternalEnergy' % itype][()]
-            self.rho[istart:ifinish] = f['PartType%d/Density' % itype][()]
-            if self.convention != 'Arepo':
-                self.smoothinglength[istart:ifinish] = f['PartType%d/SmoothingLength' % itype][()]
+            if self.isics == False:
+                self.rho[istart:ifinish] = f['PartType%d/Density' % itype][()]
+
+        if self.convention.lower() != 'arepo':
+            self.smoothinglength[istart:ifinish] = f['PartType%d/SmoothingLengths' % itype][()]
         
         # Extra gas data
         if extra_flags.get('ismetallicity', False):
@@ -346,7 +348,7 @@ class write_hdf5:
     
         with h5py.File(filename, "w") as f:
             self._write_header(f)
-            self._write_particles(f)
+            self._write_particles(f,name_of_u_block=self.name_of_u_block,name_of_mass_block=self.name_of_mass_block)
 
     def _write_header(self, f) -> None:
         header = f.create_group("Header")
@@ -362,16 +364,19 @@ class write_hdf5:
         if self.output_convention.upper() == 'SWIFT':
             header.attrs.update({
                 "Scale-factor": getattr(self,'scale_factor',1.),
+                "Time": getattr(self,'time',0.),
                 "BoxSize": np.full(3, getattr(self,'box_size',0.)),
                 "Dimension": getattr(self,'dimension',3),
             })
-        elif self.output_convention.upper() in ['GADGET4', 'AREPO']:
+        elif self.output_convention.upper() in ['GADGET4,AREPO']:
+            redshift = 0.0 if getattr(self,'scale_factor',1.) <= 0 else 1. / getattr(self,'scale_factor',1.) - 1.
             header.attrs.update({
                 "Time": getattr(self,'scale_factor',1.),
-                "BoxSize": getattr(self,'box_size',0.),
+                "NumPart_ThisFile": self.num_part_this_file,
+                "Redshift": redshift,
             })
         else:  # GADGET2/3 fallback
-            redshift = 0.0 if self.ScaleFactor <= 0 else 1. / self.ScaleFactor - 1.
+            redshift = 0.0 if getattr(self,'scale_factor',1.) <= 0 else 1. / getattr(self,'scale_factor',1.) - 1.
             header.attrs.update({
                 "Time": getattr(self,'scale_factor',1.),
                 "Redshift": redshift,
@@ -416,9 +421,10 @@ class write_hdf5:
                 "Omega_lambda": getattr(self,'omega_lambda',0.7),
                 "h": getattr(self,'hubble_param',0.7),
             })
-        elif self.output_convention.upper() in ['GADGET4', 'AREPO']:
+        elif self.output_convention.upper() in ['GADGET4','AREPO']:
             params = f.create_group('Parameters')
             params.attrs.update({
+                "BoxSize": getattr(self,'box_size',0.),
                 "Omega0": getattr(self,'omega_0',0.3),
                 "OmegaLambda": getattr(self,'omega_lambda',0.7),
                 "HubbleParam": getattr(self,'hubble_param',0.7),
@@ -436,22 +442,25 @@ class write_hdf5:
                     self._write_ids(group, i, self.idx, self.idx_type)
                 if getattr(self,'mass',None) is not None:
                     self._write_masses(group, i, self.idx, self.idx_type, kwargs.get("name_of_mass_block", "Masses"))
-                if getattr(self,'u',None) is not None:
-                    self._write_internal_energies(group, i, self.idx, self.idx_type)
-                if getattr(self,'rho',None) is not None:
-                    self._write_densities(group, i, self.idx, self.idx_type)
+                if getattr(self,'u',None) is not None and i==getattr(self,'gas_type',0):
+                    self._write_internal_energies(group, i, self.idx[self.idx_type[self.gas_type]:self.idx_type[self.gas_type+1]], self.idx_type, kwargs.get("name_of_u_block", "InternalEnergy"))
+                if getattr(self,'rho',None) is not None and i==getattr(self,'gas_type',0):
+                    self._write_densities(group, i, self.idx[self.idx_type[self.gas_type]:self.idx_type[self.gas_type+1]], self.idx_type)
                 if getattr(self,'hsml',None) is not None:
-                    self._write_smoothing_lengths(group, i, self.idx, self.idx_type)
-                if getattr(self,'gas_Z',None) is not None:
-                    self._write_metallicities(group, i, self.idx, self.idx_type,metallicity_type='gas')
-                if getattr(self,'stellar_Z',None) is not None:
-                    self._write_metallicities(group, i, self.idx, self.idx_type,metallicity_type='stellar')
-                if getattr(self,'sfr',None) is not None:
-                    self._write_star_formation_rates(group, i, self.idx, self.idx_type)
-                if getattr(self,'age',None) is not None:
-                    self._write_stellar_ages(group, i, self.idx, self.idx_type)
-                if getattr(self,'initmass',None) is not None:
-                    self._write_stellar_init_mass(group, i, self.idx, self.idx_type)
+                    if i==getattr(self,'gas_type',0):
+                        self._write_smoothing_lengths(group, i, self.idx, self.idx_type)
+                    elif i==getattr(self,'star_type',4):
+                        self._write_smoothing_lengths(group, i, self.idx, self.idx_type)
+                if getattr(self,'gas_Z',None) is not None and i==getattr(self,'gas_type',0):
+                    self._write_metallicities(group, i, self.idx[self.idx_type[self.gas_type]:self.idx_type[self.gas_type+1]], self.idx_type,metallicity_type='gas')
+                if getattr(self,'stellar_Z',None) is not None and i==getattr(self,'star_type',4):
+                    self._write_metallicities(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type,metallicity_type='stellar')
+                if getattr(self,'sfr',None) is not None and i==getattr(self,'star_type',4):
+                    self._write_star_formation_rates(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type)
+                if getattr(self,'age',None) is not None and i==getattr(self,'star_type',4):
+                    self._write_stellar_ages(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type)
+                if getattr(self,'initmass',None) is not None and i==getattr(self,'star_type',4):
+                    self._write_stellar_init_mass(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type)
 
     def _write_positions(self, group, i, idx, idx_type):
         data_pos = group.create_dataset(
@@ -497,9 +506,9 @@ class write_hdf5:
             "h-scale-exponent": -1,
         })
 
-    def _write_internal_energies(self, group, i, idx, idx_type):
+    def _write_internal_energies(self, group, i, idx, idx_type, name_of_u_block):
         data_u = group.create_dataset(
-            'InternalEnergy',
+            name_of_u_block,
             data=self.u[idx][idx_type[i]:idx_type[i+1]],
         )
         data_u.attrs.update({
@@ -511,7 +520,7 @@ class write_hdf5:
     def _write_smoothing_lengths(self, group, i, idx, idx_type):
         data_smoothinglength = group.create_dataset(
             'SmoothingLength',
-            data=self.smoothinglength[idx][idx_type[i]:idx_type[i+1]],
+            data=self.hsml[idx][idx_type[i]:idx_type[i+1]],
         )
         data_smoothinglength.attrs.update({
             "CGSConversionFactor": self.unit_length_in_cgs,
