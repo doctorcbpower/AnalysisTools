@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+haloio_subfind.py
+
+Reader for SubFind-format halo catalogues (HDF5).
+"""
+
+import h5py
+import numpy as np
+from typing import Dict, Any, Tuple
+
+
+def read_subfind(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    """Read a SubFind-format halo catalogue (HDF5).
+
+    Parameters
+    ----------
+    filename : str
+        Path to the SubFind halo catalogue file.
+    comoving : bool, optional
+        If True, convert positions to comoving coordinates.
+
+    Returns
+    -------
+    metadata : dict
+        Header and parameter attributes.
+    halos : dict[str, np.ndarray]
+        Group-level properties.
+    subhalos : dict[str, np.ndarray]
+        Subhalo-level properties (if present).
+    """
+    with h5py.File(filename, "r") as f:
+        header = dict(f["Header"].attrs)
+        params = dict(f["Parameters"].attrs)
+
+        metadata = {
+            "BoxSize": header.get("BoxSize"),
+            "NumFiles": header.get("NumFiles", 1),
+            "HubbleParam": params.get("HubbleParam"),
+            "TotNgroups": header.get("Ngroups_Total"),
+            "TotNsubgroups": header.get("Nsubgroups_Total", header.get("Nsubhalos_Total")),
+        }
+
+        halos = {key: f["Group/" + key][()] for key in f["Group"].keys() if isinstance(f["Group/" + key], h5py.Dataset)}
+
+        subhalos = {}
+        if "Subhalo" in f:
+            subhalos = {
+                key: f["Subhalo/" + key][()] for key in f["Subhalo"].keys()
+                if isinstance(f["Subhalo/" + key], h5py.Dataset)
+            }
+
+    # Optional comoving conversion
+    if comoving and "GroupPos" in halos and metadata.get("HubbleParam"):
+        hubble = metadata["HubbleParam"]
+        halos["GroupPos"] /= hubble
+        if "SubhaloPos" in subhalos:
+            subhalos["SubhaloPos"] /= hubble
+
+    return metadata, halos, subhalos
+

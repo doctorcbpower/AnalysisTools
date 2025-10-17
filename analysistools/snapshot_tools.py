@@ -69,17 +69,22 @@ class SnapshotTools:
         self.pids_type = kwargs.get("pids_type", 32)
         self.not_hires_ptypes = kwargs.get("not_hires_ptypes", [2, 3, 7])
         self.isics = kwargs.get("isics", False)
-        
-        
+        print(self.isics)
+                
         # Set num_part_type for consistency
         self.num_part_type = 6
         
         self._set_units()
+
+        # Logging setup
+        self.logger = logging.getLogger(__name__)
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            self.logger.addHandler(handler)
+            self.logger.propagate = False
+        self.logger.setLevel(kwargs.get("loglevel", logging.INFO))
         
-        logging.info(
-            f"Initialised SnapshotTools (format={self.snapfileformat}, convention={self.convention})"
-        )
-    
     def _set_units(self):
         """Define useful units needed for snapshots"""
         SOLAR_MASS_IN_CGS = 1.989e33
@@ -182,8 +187,9 @@ class SnapshotTools:
         
         if convention is not None:
             self.convention = convention
-        
+
         try:
+            self.logger.info(f"Reading snapshot '{filename}' using {self.snapfileformat}")
             if self.snapfileformat == "HDF5":
                 reader = read_hdf5()
                 self._transfer_attributes_to_reader(reader)
@@ -206,7 +212,7 @@ class SnapshotTools:
                              idx_type: np.int64,
                              file_format: str = "hdf5",
                              convention: str = "SWIFT",
-                             blocks_to_write: str = ['pos', 'vel', 'pids', 'mass'],
+                             blocks_to_write: list[str] | None = None,
                        ) -> None:
         """
         Write snapshot data to file in the chosen format.
@@ -217,7 +223,16 @@ class SnapshotTools:
             Path to the output file.
         file_format : str, optional
             File format to use. Currently supports "hdf5".
+        convention: str, optional
+            Code convention to use - determines the names of blocks
+        blocks_to_write : list[str], optional   
+            List of dataset names to include in the output. Defaults to
+            ['pos', 'vel', 'pids', 'mass'].
         """
+        blocks = blocks_to_write or ['pos', 'vel', 'pids', 'mass']
+
+        self.logger.info(f"Writing snapshot '{filename}' using {self.snapfileformat}")
+
         if file_format.lower() == "hdf5":
             writer = write_hdf5(output_convention=convention, idx=idx, idx_type=idx_type)
             self._transfer_attributes_to_writer(writer)
@@ -225,7 +240,10 @@ class SnapshotTools:
             Options are: pos, vel, pids, mass, u, rho, hsml, gas_Z, stellar_Z,
                          sfr, age, initmass
             """
-            self._transfer_datasets_to_writer(writer,blocks_to_write)
+
+            self._transfer_datasets_to_writer(writer,
+                                              blocks,
+                                              )
             writer.write_hdf5_snapshot(filename)
         else:
             raise ValueError(f"Unsupported snapshot format: {file_format}")
@@ -243,7 +261,7 @@ class SnapshotTools:
         Parameters
         ----------
         part_type : str
-            Which particle types to load. Options: 'all', 'gas', 'star', 'bh'
+            Which particle types to load. Options: 'all', 'gas', 'star', 'dm', 'bh'
         """
         if not hasattr(self, 'pos') or not hasattr(self, 'num_part_total'):
             raise RuntimeError("No data loaded. Call read() first.")
@@ -260,15 +278,19 @@ class SnapshotTools:
         
         # Load particle data for each requested type
         if load_flags['gas']:
+            print('gas',offsets['gas'])
             self.gas = self._create_particle_object('gas', offsets)
         
         if load_flags['dm']:
+            print('dm',offsets['dm'])
             self.dm = self._create_particle_object('dm', offsets)
         
         if load_flags['star']:
+            print('star',offsets['star'])
             self.star = self._create_particle_object('star', offsets)
         
         if load_flags['bh']:
+            print('bh',offsets['bh'])
             self.bh = self._create_particle_object('bh', offsets)
     
     def _calculate_particle_offsets(self):
@@ -296,16 +318,15 @@ class SnapshotTools:
     
     def _determine_load_flags(self, part_type: str, offsets: Dict):
         """Determine which particle types should be loaded."""
-        load_flags = {'gas': False, 'dm': True, 'star': False, 'bh': False}
+        load_flags = {'gas': False, 'dm': False, 'star': False, 'bh': False}
         
         if part_type == 'all':
-            for ptype in ['gas', 'star', 'bh']:
+            for ptype in ['gas', 'star', 'bh', 'dm']:
                 if offsets[ptype]['end'] - offsets[ptype]['start'] > 0:
                     load_flags[ptype] = True
         elif part_type in load_flags:
             if offsets[part_type]['end'] - offsets[part_type]['start'] > 0:
                 load_flags[part_type] = True
-                load_flags['dm'] = False
         else:
             raise ValueError(f"Unknown particle type: {part_type}")
         
@@ -316,9 +337,11 @@ class SnapshotTools:
         start, end = offsets[ptype]['start'], offsets[ptype]['end']
         
         kwargs = {}
-        if ptype == 'gas' and hasattr(self, 'u') and hasattr(self, 'rho'):
-            kwargs['internal_energy'] = self.u[start:end]
-            kwargs['density'] = self.rho[start:end]
+        if ptype == 'gas':
+            if hasattr(self, 'u'):
+                kwargs['internal_energy'] = self.u[start:end]
+            if hasattr(self, 'rho'):
+                kwargs['density'] = self.rho[start:end]
         
         return self.ParticleProperties(
             self.pos[start:end],

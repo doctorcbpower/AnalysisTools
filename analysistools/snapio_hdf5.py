@@ -280,14 +280,13 @@ class read_hdf5:
 
     def _read_gas_data(self, f, itype, istart, ifinish, jstart, extra_flags):
         """Read gas particle specific data."""
-        if self.convention == 'SWIFT':
-            self.u[istart:ifinish] = f['PartType%d/InternalEnergies' % itype][()]
-            if self.isics == False:
-                self.rho[istart:ifinish] = f['PartType%d/Densities' % itype][()]
-        else:
-            self.u[istart:ifinish] = f['PartType%d/InternalEnergy' % itype][()]
-            if self.isics == False:
-                self.rho[istart:ifinish] = f['PartType%d/Density' % itype][()]
+        ptype_group = f[f'PartType{itype}']
+        field_name = 'InternalEnergy' if 'InternalEnergy' in ptype_group else 'InternalEnergies'
+        self.u[istart:ifinish] = ptype_group[field_name][()]
+
+        if not self.isics:
+            field_name = 'Density' if 'Density' in ptype_group else 'Densities'
+            self.rho[istart:ifinish] = ptype_group[field_name][()]
 
         if self.convention.lower() != 'arepo':
             self.smoothinglength[istart:ifinish] = f['PartType%d/SmoothingLengths' % itype][()]
@@ -368,15 +367,25 @@ class write_hdf5:
                 "BoxSize": np.full(3, getattr(self,'box_size',0.)),
                 "Dimension": getattr(self,'dimension',3),
             })
-        elif self.output_convention.upper() in ['GADGET4,AREPO']:
-            redshift = 0.0 if getattr(self,'scale_factor',1.) <= 0 else 1. / getattr(self,'scale_factor',1.) - 1.
+        elif self.output_convention.upper() in ['GADGET4', 'AREPO']:
+            redshift = 0.0 if self.scale_factor <= 0 else 1. / self.scale_factor - 1.
             header.attrs.update({
                 "Time": getattr(self,'scale_factor',1.),
                 "NumPart_ThisFile": self.num_part_this_file,
+                "BoxSize": getattr(self,'box_size',0.),
                 "Redshift": redshift,
+                "Omega0": getattr(self,'omega_0',0.3),
+                "OmegaLambda": getattr(self,'omega_lambda',0.7),
+                "HubbleParam": getattr(self,'hubble_param',0.7),
+                "Flag_Cooling": getattr(self,'flag_cooling',0),
+                "Flag_StellarAge": getattr(self,'flag_stellar_age',0),
+                "Flag_Sfr": getattr(self,'flag_sfr',0),
+                "Flag_Metals": getattr(self,'flag_metals',0),
+                "Flag_Feedback": getattr(self,'flag_feedback',0),
+                "Flag_DoublePrecision": getattr(self,'flag_double_precision',0),
             })
         else:  # GADGET2/3 fallback
-            redshift = 0.0 if getattr(self,'scale_factor',1.) <= 0 else 1. / getattr(self,'scale_factor',1.) - 1.
+            redshift = 0.0 if self.scale_factor <= 0 else 1. / self.scale_factor - 1.
             header.attrs.update({
                 "Time": getattr(self,'scale_factor',1.),
                 "Redshift": redshift,
