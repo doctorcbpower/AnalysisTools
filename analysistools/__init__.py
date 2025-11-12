@@ -4,6 +4,7 @@ from .snapio_hdf5 import *
 from .snapio_binary import *
 from .halo_tools import *
 from .haloio_subfind import *
+from .haloio_swiftfof import *
 from .haloio_ahf import *
 from .haloio_velociraptor import *
 from .merger_tree_tools import *

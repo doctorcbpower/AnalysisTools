@@ -19,13 +19,15 @@ import h5py
 import numpy as np
 
 from .haloio_subfind import read_subfind
+from .haloio_swiftfof import read_swiftfof
 from .haloio_ahf import read_ahf
 from .haloio_velociraptor import read_velociraptor
 
 FORMAT_READERS = {
     "SUBFIND": read_subfind,
     "AHF": read_ahf,
-    "VELOCIrapTOR": read_velociraptor,
+    "VELOCIraptor": read_velociraptor,
+    "SWIFT_FOF": read_swiftfof,
 }
 
 # ---------------------------------------------------------------------
@@ -52,10 +54,13 @@ class HaloTools:
         fmtmap = {
             "1": "SUBFIND",
             "2": "AHF",
-            "3": "VELOCIrapTOR",
+            "3": "VELOCIraptor",
+            "4": "SWIFT_FOF",
             1: "SUBFIND",
             2: "AHF",
-            3: "VELOCIrapTOR",
+            3: "VELOCIraptor",
+            4: "SWIFT_FOF",
+
         }
         self.halocatfileformat = fmtmap.get(str(halocatfileformat).upper(), str(halocatfileformat).upper())
         if self.halocatfileformat not in FORMAT_READERS:
