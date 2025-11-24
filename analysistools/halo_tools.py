@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 halo_tools.py
 Refactored: 2025-10-16
 
 Unified interface for reading and analysing halo catalogues
-from AHF, SubFind, and VELOCIraptor outputs.
+from AHF, SubFind, VELOCIraptor, and SWIFT outputs.
 
 Author: C. Power
-Refactor: ChatGPT (GPT-5)
 """
 
 import os
@@ -22,12 +20,14 @@ from .haloio_subfind import read_subfind
 from .haloio_swiftfof import read_swiftfof
 from .haloio_ahf import read_ahf
 from .haloio_velociraptor import read_velociraptor
+from .halo_tools_standardise_names import standardise_catalogue_names
 
 FORMAT_READERS = {
     "SUBFIND": read_subfind,
     "AHF": read_ahf,
     "VELOCIraptor": read_velociraptor,
     "SWIFT_FOF": read_swiftfof,
+#    "SWIFT_HBT": read_swifthbt,
 }
 
 # ---------------------------------------------------------------------
@@ -40,31 +40,31 @@ class HaloTools:
 
     Examples
     --------
-    >>> ht = HaloTools("SubFind", comoving_units=True)
-    >>> halos = ht.read("groups_010.hdf5")
+    >>> ht = HaloTools(comoving_units=True)
+    >>> halos = ht.read_catalogue(halocat_filename="groups_010.hdf5",halocat_fileformat="SubFind")
     >>> ht.summary()
     """
 
     def __init__(
         self,
-        halocatfileformat: Union[str, int],
         comoving_units: bool = False,
         **kwargs,
     ):
-        fmtmap = {
+        self.fmtmap = {
             "1": "SUBFIND",
             "2": "AHF",
             "3": "VELOCIraptor",
             "4": "SWIFT_FOF",
+            "5": "SWIFT_HBT",
             1: "SUBFIND",
             2: "AHF",
             3: "VELOCIraptor",
             4: "SWIFT_FOF",
-
+            5: "SWIFT_HBT",
         }
-        self.halocatfileformat = fmtmap.get(str(halocatfileformat).upper(), str(halocatfileformat).upper())
-        if self.halocatfileformat not in FORMAT_READERS:
-            raise ValueError(f"Unsupported halo catalogue format: {halocatfileformat}")
+        # self.halocatfileformat = fmtmap.get(str(halocatfileformat).upper(), str(halocatfileformat).upper())
+        # if self.halocatfileformat not in FORMAT_READERS:
+        #     raise ValueError(f"Unsupported halo catalogue format: {halocatfileformat}")
 
         self.comoving_units = comoving_units
         self.filename: Optional[str] = None
@@ -84,13 +84,13 @@ class HaloTools:
             self.logger.propagate = False
         self.logger.setLevel(kwargs.get("loglevel", logging.INFO))
 
-    # -----------------------------------------------------------------
-    # Core I/O methods
-    # -----------------------------------------------------------------
-
-    def read(self, filename: str) -> Dict[str, np.ndarray]:
+    def read_catalogue(self, filename: str, fileformat: Union[str, int],) -> Dict[str, np.ndarray]:
         """Read a halo catalogue from disk."""
         self.filename = filename
+        self.halocatfileformat = self.fmtmap.get(str(fileformat).upper(), str(fileformat).upper())
+        if self.halocatfileformat not in FORMAT_READERS:
+            raise ValueError(f"Unsupported halo catalogue format: {fileformat}")
+
         reader = FORMAT_READERS[self.halocatfileformat]
 
         self.logger.info(f"Reading halo catalogue '{filename}' using {self.halocatfileformat}")
@@ -100,9 +100,13 @@ class HaloTools:
         self.logger.info(f"Loaded {nh:,} halos from {self.halocatfileformat} file.")
         return self.metadata, self.halos, self.subhalos
 
-    # -----------------------------------------------------------------
-    # Utility methods
-    # -----------------------------------------------------------------
+    def standardise_names(self):
+        """Normalise raw halo data to the common schema."""
+        if self.halos is None:
+            self.logger.warning("No halo data loaded.")
+            return
+
+        self.standardised_names = standardise_catalogue_names(self.halos, self.halocatfileformat, self.logger)
 
     def summary(self) -> None:
         """Print a concise summary of loaded halo catalogue."""
@@ -123,26 +127,3 @@ class HaloTools:
             for k, v in self.metadata.items():
                 print(f"  {k:20s}: {v}")
 
-    def get_property(self, key: str, subhalos: bool = False) -> Optional[np.ndarray]:
-        """Retrieve a property array for halos or subhalos."""
-        data = self.subhalos if subhalos else self.halos
-        if data is None:
-            self.logger.warning("No data loaded.")
-            return None
-        return data.get(key)
-
-    # -----------------------------------------------------------------
-    # Optional: convenience computation
-    # -----------------------------------------------------------------
-
-    def compute_virial_masses(self) -> Optional[np.ndarray]:
-        """Example derived quantity computation."""
-        if self.halos is None or "Group_R_Crit200" not in self.halos:
-            self.logger.warning("No virial radii found.")
-            return None
-
-        r = self.halos["Group_R_Crit200"]
-        rho_crit = 2.775e11  # h^2 Msun/Mpc^3
-        mass = 4 / 3 * np.pi * (r**3) * 200 * rho_crit
-        self.halos["M200"] = mass
-        return mass

@@ -37,11 +37,11 @@ def read_swiftfof(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any]
         metadata = {
             "BoxSize": header.get("BoxSize"),
             "NumFiles": header.get("NumFilesPerSnapshot", 1),
-            "HubbleParam": params.get("h"),
+            "HubbleParam": cosmo.get("h"),
             "TotNgroups": header.get("NumGroups_Total"),
         }
 
-        halos = {key: f["Group/" + key][()] for key in f["Group"].keys() if isinstance(f["Group/" + key], h5py.Dataset)}
+        halos = {key: f["Groups/" + key][()] for key in f["Groups"].keys() if isinstance(f["Groups/" + key], h5py.Dataset)}
         subhalos = {}
         
     # Optional comoving conversion
