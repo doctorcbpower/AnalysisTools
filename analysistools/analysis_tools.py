@@ -154,7 +154,7 @@ class MassFunctionTools:
     def BinByHaloMass(self,halo_mass,lbox,delta_logmass=0.,numbins=10):
         dlm=delta_logmass
         if dlm>0:
-            numbins=np.int((np.max(np.log10(halo_mass))-np.min(np.log10(halo_mass)))/dlm)
+            numbins=int((np.max(np.log10(halo_mass))-np.min(np.log10(halo_mass)))/dlm)
         else:
             dlm=((np.max(np.log10(halo_mass)-np.min(np.log10(halo_mass))/numbins)))
         print("Binning data with %d bins..."%numbins)

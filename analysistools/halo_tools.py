@@ -62,9 +62,6 @@ class HaloTools:
             4: "SWIFT_FOF",
             5: "SWIFT_HBT",
         }
-        # self.halocatfileformat = fmtmap.get(str(halocatfileformat).upper(), str(halocatfileformat).upper())
-        # if self.halocatfileformat not in FORMAT_READERS:
-        #     raise ValueError(f"Unsupported halo catalogue format: {halocatfileformat}")
 
         self.comoving_units = comoving_units
         self.filename: Optional[str] = None
@@ -84,8 +81,29 @@ class HaloTools:
             self.logger.propagate = False
         self.logger.setLevel(kwargs.get("loglevel", logging.INFO))
 
-    def read_catalogue(self, filename: str, fileformat: Union[str, int],) -> Dict[str, np.ndarray]:
-        """Read a halo catalogue from disk."""
+    def read_catalogue(self, filename: str, fileformat: Union[str, int], standardise: bool = False) -> Dict[str, np.ndarray]:
+        """
+        Read a halo catalogue from disk.
+        
+        Parameters
+        ----------
+        filename : str
+            Path to the halo catalogue file.
+        fileformat : str or int
+            Format of the halo catalogue (e.g. "SUBFIND", "AHF", "VELOCIraptor", "SWIFT_FOF").
+        standardise : bool, optional
+            If True, normalise field names to common schema.
+        
+        Returns
+        -------
+        halos : dict[str, np.ndarray]
+            Dictionary of halo properties.
+        subhalos : dict[str, np.ndarray]
+            Dictionary of subhalo properties (if present).                      
+        metadata : dict
+            Dictionary of metadata from the catalogue header.            
+        """
+        
         self.filename = filename
         self.halocatfileformat = self.fmtmap.get(str(fileformat).upper(), str(fileformat).upper())
         if self.halocatfileformat not in FORMAT_READERS:
@@ -98,6 +116,12 @@ class HaloTools:
 
         nh = len(next(iter(self.halos.values()))) if self.halos else 0
         self.logger.info(f"Loaded {nh:,} halos from {self.halocatfileformat} file.")
+        
+        # Optional post-processing
+        if standardise:
+            self.standardise_names()
+            return self.metadata, self.standardised_names, self.subhalos
+
         return self.metadata, self.halos, self.subhalos
 
     def standardise_names(self):

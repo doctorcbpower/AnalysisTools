@@ -38,6 +38,10 @@ def read_swiftfof(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any]
             "BoxSize": header.get("BoxSize"),
             "NumFiles": header.get("NumFilesPerSnapshot", 1),
             "HubbleParam": cosmo.get("h"),
+            "OmegaDM": cosmo.get("Omega_cdm"),
+            "OmegaB": cosmo.get("Omega_b"),
+            "OmegaLambda": cosmo.get("Omega_lambda"),
+            "Redshift": cosmo.get("Redshift"), 
             "TotNgroups": header.get("NumGroups_Total"),
         }
 
