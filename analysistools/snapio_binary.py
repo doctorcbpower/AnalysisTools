@@ -2,9 +2,20 @@ import numpy as np
 import os
 
 class read_binary:
-    def __init__(self,filename):
-        self.filename=filename
+    """
+    Requires the following attributes to be set before read_binary_snapshot():
+    snaproot
+    snapfileformat
+    ismultifile
+    gas_type
+    star_type
+    pids_type
+    extra_blocks
+    """
 
+    def __init__(self):
+        pass
+    
     def read_binary_snapshot(self):
         """Main function to read binary snapshot data."""
         # Determine filename
@@ -24,7 +35,7 @@ class read_binary:
         istart, ifinish = self._calculate_binary_offsets()
         
         # Read data from all files
-        for ifile in range(self.NumFiles):
+        for ifile in range(self.num_files):
             if ifile > 0:
                 filename = fileroot + '.%d' % ifile
             
@@ -33,77 +44,80 @@ class read_binary:
 
     def _determine_binary_filename(self):
         """Determine the correct filename for the binary snapshot."""
-        fileroot = self.snapfilename
-        filename = fileroot
-        
-        if not os.path.exists(filename):
-            filename = fileroot + '.0'
-        
-        return fileroot, filename
+        if self.ismultifile == False:
+            filename = str(self.snaproot)
+        else:
+            filename = f"{self.snaproot}.0"
+
+        return self.snaproot, filename
 
     def _read_binary_header(self, filename):
         """Read header information from binary snapshot file."""
         print('Reading data from %s' % filename)
+
+        self.NumPartType = 6  # GADGET standard
         
         with open(filename, 'rb') as f:
             offset = 0
-            
-            # Handle SNAP2 format offset
+  
+            # Handle SNAP2 format offset - need to skip
+            # initial 4 byte buffer, 4 chars, 1 int, 4 chars, 4 byte buffer.
+            # This corresponds to 20 bytes in total, assuming a 4-byte int.
             if self.snapfileformat == 'SNAP2':
-                offset += 16
-            
+                offset += 20
+
             # Read header fields sequentially
             offset += 4
             f.seek(offset, os.SEEK_SET)
-            self.NumPart_ThisFile = np.fromfile(f, dtype=np.int32, count=6)
-            
+            self.num_part_this_file = np.fromfile(f, dtype=np.int32, count=6)
+
             offset += 24
             f.seek(offset, os.SEEK_SET)
-            self.MassTable = np.fromfile(f, dtype=np.float64, count=6)
+            self.mass_table = np.fromfile(f, dtype=np.float64, count=6)
             
             offset += 48
             f.seek(offset, os.SEEK_SET)
-            self.ScaleFactor = np.fromfile(f, dtype=np.float64, count=1)[0]
+            self.scale_factor = np.fromfile(f, dtype=np.float64, count=1)[0]
             
             offset += 8
             f.seek(offset, os.SEEK_SET)
-            self.Redshift = np.fromfile(f, dtype=np.float64, count=1)[0]
+            self.redshift = np.fromfile(f, dtype=np.float64, count=1)[0]
             
             offset += 16
             f.seek(offset, os.SEEK_SET)
-            self.NumPart_Total = np.fromfile(f, dtype=np.int32, count=6)
+            self.num_part_total = np.fromfile(f, dtype=np.int32, count=6)
             
             offset += 28
             f.seek(offset, os.SEEK_SET)
-            self.NumFiles = np.fromfile(f, dtype=np.int32, count=1)[0]
+            self.num_files = np.fromfile(f, dtype=np.int32, count=1)[0]
             
             offset += 4
             f.seek(offset, os.SEEK_SET)
-            self.BoxSize = np.fromfile(f, dtype=np.float64, count=1)[0]
+            self.box_size = np.fromfile(f, dtype=np.float64, count=1)[0]
             
             offset += 8
             f.seek(offset, os.SEEK_SET)
-            self.Omega0 = np.fromfile(f, dtype=np.float64, count=1)[0]
+            self.omega_0 = np.fromfile(f, dtype=np.float64, count=1)[0]
             
             offset += 8
             f.seek(offset, os.SEEK_SET)
-            self.OmegaLambda = np.fromfile(f, dtype=np.float64, count=1)[0]
+            self.omega_lambda = np.fromfile(f, dtype=np.float64, count=1)[0]
             
             offset += 8
             f.seek(offset, os.SEEK_SET)
-            self.HubbleParam = np.fromfile(f, dtype=np.float64, count=1)[0]
+            self.hubble_param = np.fromfile(f, dtype=np.float64, count=1)[0]
             
-            if self.NumFiles > 1:
-                print('Data is split across %d files' % self.NumFiles)
+            if self.num_files > 1:
+                print('Data is split across %d files' % self.num_files)
     
     def _analyze_mass_structure(self):
         """Analyze which particle types are in the mass block."""
-        idx_with_mass = np.where(self.MassTable == 0)[0]  # Species in mass block have zero MassTable entries
+        idx_with_mass = np.where(self.mass_table == 0)[0]  # Species in mass block have zero MassTable entries
         
-        NumPart = np.sum(self.NumPart_Total)
+        NumPart = np.sum(self.num_part_total)
         print('Number of particles: %010d' % NumPart)
         
-        NumPart_InMassBlock = np.sum(self.NumPart_Total[idx_with_mass])
+        NumPart_InMassBlock = np.sum(self.num_part_total[idx_with_mass])
         print('Number of particles in mass block: %010d' % NumPart_InMassBlock)
         
         return idx_with_mass, NumPart, NumPart_InMassBlock
@@ -121,13 +135,13 @@ class read_binary:
         self.mass = np.ndarray(shape=(NumPart))
         
         # Gas particle specific arrays
-        if self.NumPart_Total[0] > 0:
-            self.u = np.ndarray(shape=(self.NumPart_Total[0]))
-            self.rho = np.ndarray(shape=(self.NumPart_Total[0]))
-    
+        if self.num_part_total[0] > 0:
+            self.u = np.ndarray(shape=(self.num_part_total[0]))
+            self.rho = np.ndarray(shape=(self.num_part_total[0]))
+
     def _setup_extra_blocks_binary(self, NumPart):
         """Setup extra data blocks for binary format."""
-        blocknames = self.GetBlockNames()
+        blocknames = self.extra_blocks
         extra_flags = {
             'isstellarage': False,
             'ismetallicity': False,
@@ -139,16 +153,16 @@ class read_binary:
             print('Loading extra blocks: %s' % self.extra_blocks)
             
             if 'AGE' in self.extra_blocks:
-                self.stellarage = np.ndarray(shape=(self.NumPart_Total[self.star_type]))
+                self.stellarage = np.ndarray(shape=(self.num_part_total[self.star_type]))
                 extra_flags['isstellarage'] = True
             
             if 'Z' in self.extra_blocks:
-                self.gas_metallicity = np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
-                self.stellar_metallicity = np.ndarray(shape=(self.NumPart_Total[self.star_type]))
+                self.gas_metallicity = np.ndarray(shape=(self.num_part_total[self.gas_type]))
+                self.stellar_metallicity = np.ndarray(shape=(self.num_part_total[self.star_type]))
                 extra_flags['ismetallicity'] = True
             
             if 'SFR' in self.extra_blocks:
-                self.gas_sfr = np.ndarray(shape=(self.NumPart_Total[self.gas_type]))
+                self.gas_sfr = np.ndarray(shape=(self.num_part_total[self.gas_type]))
                 extra_flags['issfr'] = True
             
             if 'POT' in self.extra_blocks:
@@ -160,7 +174,7 @@ class read_binary:
     def _calculate_binary_offsets(self):
         """Calculate particle type offsets for binary format."""
         istart = np.zeros(self.NumPartType, dtype=np.uint64)
-        istart[1:] = np.cumsum(self.NumPart_Total[:-1])
+        istart[1:] = np.cumsum(self.num_part_total[:-1])
         ifinish = np.copy(istart)
         
         return istart, ifinish
@@ -327,7 +341,7 @@ class read_binary:
                     self.mass[istart[itype]:ifinish[itype]] = mass_block[cstart:cfinish]
                     cstart = cfinish
                 else:
-                    self.mass[istart[itype]:ifinish[itype]] = self.MassTable[itype] * np.ones(NumPartInThisFile[itype])
+                    self.mass[istart[itype]:ifinish[itype]] = self.mass_table[itype] * np.ones(NumPartInThisFile[itype])
                 
                 # Potential
                 if extra_flags['ispotential']:
@@ -370,7 +384,7 @@ class read_binary:
             NumPartInFile = np.sum(NumPartInThisFile)
             NumPart_InMassBlock_InFile = np.sum(NumPartInThisFile[idx_with_mass])
             
-            if self.NumFiles > 1:
+            if self.num_files > 1:
                 print('Reading %010d particles from %s' % (NumPartInFile, filename))
                 print('Number of particles in mass block: %010d' % NumPart_InMassBlock_InFile)
             

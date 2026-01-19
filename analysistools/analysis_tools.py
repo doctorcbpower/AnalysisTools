@@ -151,17 +151,56 @@ class MassFunctionTools:
             self.numbins=kwargs.get('numbins')
         self.halo_id=0
 
-    def BinByHaloMass(self,halo_mass,lbox,delta_logmass=0.,numbins=10):
-        dlm=delta_logmass
-        if dlm>0:
-            numbins=int((np.max(np.log10(halo_mass))-np.min(np.log10(halo_mass)))/dlm)
-        else:
-            dlm=((np.max(np.log10(halo_mass)-np.min(np.log10(halo_mass))/numbins)))
-        print("Binning data with %d bins..."%numbins)
-        (num,lmbins)=np.histogram(np.log10(halo_mass)+10,bins=numbins)
-        lm=np.array([])
-        for i in range(len(lmbins)-1):
-            lm=np.append(lm,0.5*(lmbins[i]+lmbins[i+1]))
-        ldndlm=np.log10(num/lbox**3/dlm)
-        return lm,ldndlm
+    def BinByHaloMass(self, halo_mass, lbox,
+                      delta_logmass=0., numbins=10,
+                      centre_stat="median"):     # "median" or "mean"):
+        logm = np.log10(halo_mass)
 
+        # Case 1: user specifies delta_logmass
+        if delta_logmass > 0:
+            dm = logm.max() - logm.min()
+            numbins = max(1, int(np.ceil(dm / delta_logmass)))
+            dlm = delta_logmass
+        else:
+            # Case 2: user specifies numbins
+            dm = logm.max() - logm.min()
+            dlm = dm / numbins
+
+        print(f"Binning data with {numbins} bins, width dlm = {dlm:.4f} dex")
+
+        # -----------------------------------------
+        # Define bin edges from dlm
+        # -----------------------------------------
+        bin_edges = np.arange(logm.min(), logm.max() + dlm, dlm)
+        numbins = len(bin_edges) - 1  # update
+
+        # Digitize each mass
+        bin_index = np.digitize(logm, bin_edges) - 1
+
+        # Remove values outside bin range
+        valid = (bin_index >= 0) & (bin_index < numbins)
+        bin_index = bin_index[valid]
+        logm_valid = logm[valid]
+
+        # Count halos in each bin
+        num = np.bincount(bin_index, minlength=numbins)
+
+        # Avoid zero counts
+        num_safe = np.where(num > 0, num, np.nan)
+
+        # -----------------------------------------
+        # Compute lm as mean or median mass in each bin
+        # -----------------------------------------
+        lm = np.full(numbins, np.nan)
+        for i in range(numbins):
+            mask = bin_index == i
+            if np.any(mask):
+                if centre_stat.lower() == "mean":
+                    lm[i] = np.mean(logm_valid[mask])
+                else:
+                    lm[i] = np.median(logm_valid[mask])  # default
+
+        # dn/dlogM (log10)
+        ldndlm = np.log10(num_safe / lbox**3 / dlm)
+
+        return lm, ldndlm

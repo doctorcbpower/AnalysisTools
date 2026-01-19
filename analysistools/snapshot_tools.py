@@ -69,7 +69,7 @@ class SnapshotTools:
         self.pids_type = kwargs.get("pids_type", 32)
         self.not_hires_ptypes = kwargs.get("not_hires_ptypes", [2, 3, 7])
         self.isics = kwargs.get("isics", False)
-        print(self.isics)
+        self.is_multifile = False
                 
         # Set num_part_type for consistency
         self.num_part_type = 6
@@ -102,26 +102,78 @@ class SnapshotTools:
     
     def load_snapshot(self, snapfilename: str) -> None:
         """Register and validate the snapshot file for later use."""
-        filename = snapfilename + '.hdf5'
-        if not os.path.exists(filename):
-            filename = snapfilename + '.0.hdf5'
-        if not os.path.exists(filename):
-            raise FileNotFoundError(f"Snapshot file {filename} not found")
-        self.snapfilename = filename
-        logging.info(f"Snapshot file set: {filename}")
+        import os
+        import glob
+
+        # Strip known suffixes to get a clean base
+        base = snapfilename
+        for suffix in (".hdf5", ".0.hdf5", ".0"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+
+        self.snaproot = base
+        
+        # --- probe filesystem ---
+        hdf5_single = base + ".hdf5"
+        hdf5_multi  = sorted(glob.glob(base + ".[0-9]*.hdf5"))
+        bin_multi   = sorted(glob.glob(base + ".[0-9]*"))
+
+        # Remove false positives (binary files that are actually hdf5)
+        bin_multi = [f for f in bin_multi if not f.endswith(".hdf5")]
+
+        # --- decide format and layout ---
+        if os.path.exists(hdf5_single):
+            self.is_multifile = False
+            self.snapbase = base
+            self.snapfilename = hdf5_single
+            self.num_files = 1
+
+        elif hdf5_multi:
+            self.is_multifile = True
+            self.snapbase = base
+            self.snapfilename = hdf5_multi[0]
+            self.num_files = len(hdf5_multi)
+
+        elif bin_multi:
+            self.is_multifile = True
+            self.snapbase = base
+            self.snapfilename = bin_multi[0]
+            self.num_files = len(bin_multi)
+
+        else:
+            raise FileNotFoundError(
+                f"No snapshot found for '{snapfilename}'. "
+                f"Tried HDF5 and binary (single and multi-file)."
+            )
+
+        self.logger.info(
+            f"Snapshot detected: format={self.snapfileformat}, "
+            f"multifile={self.is_multifile}, "
+            f"files={self.num_files}, "
+            f"base='{self.snapbase}'"
+        )
     
     def _transfer_attributes_to_reader(self, reader):
-        """Transfer configuration attributes to the reader instance."""
-        attrs_to_transfer = [
-            'gas_type', 'dm_type', 'star_type', 'bh_type', 'convention',
-            'positions_only', 'hires_only', 'get_ptypes', 'extra_blocks',
-            'positions_type', 'pids_type', 'not_hires_ptypes', 'num_part_type',
-            'snapfilename', 'isics',
-        ]
-        
-        for attr in attrs_to_transfer:
-            if hasattr(self, attr):
-                setattr(reader, attr, getattr(self, attr))
+        """Transfer required snapshot metadata to the reader."""
+
+        required = {
+            "snaproot": getattr(self, "snaproot", None),
+            "snapfileformat": self.snapfileformat,
+            "ismultifile": self.is_multifile,
+            "dm_type": self.dm_type,
+            "gas_type": self.gas_type,
+            "star_type": self.star_type,
+            "bh_type": self.bh_type,
+            "pids_type": self.pids_type,
+            "extra_blocks": self.extra_blocks,
+        }
+
+        for name, value in required.items():
+            if value is None:
+                raise AttributeError(
+                    f"SnapshotTools missing required attribute '{name}' for reader"
+                )
+            setattr(reader, name, value)
     
     def _transfer_attributes_to_writer(self, writer):
         """Transfer configuration attributes to the writer instance."""
@@ -182,6 +234,8 @@ class SnapshotTools:
         self : SnapshotTools
             Returns self for method chaining, with data loaded as attributes.
         """
+        print("Reading snapshot data...")
+       
         if filename is not None:
             self.load_snapshot(filename)
         
@@ -196,7 +250,7 @@ class SnapshotTools:
                 reader.read_hdf5_snapshot(snapfilename=self.snapfilename,convention=self.convention)
                 self._transfer_attributes_from_reader(reader)
             else:
-                reader = read_binary(self.snapfilename)
+                reader = read_binary()
                 self._transfer_attributes_to_reader(reader)
                 reader.read_binary_snapshot()
                 self._transfer_attributes_from_reader(reader)

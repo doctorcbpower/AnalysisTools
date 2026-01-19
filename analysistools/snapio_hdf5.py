@@ -193,6 +193,7 @@ class read_hdf5:
             if 'POT' in self.extra_blocks:
                 self.potential = np.ndarray(shape=(np.sum(self.num_part_total)))
                 extra_flags['ispotential'] = True
+                self.ispotential = True
         
         return extra_flags
 
@@ -276,7 +277,14 @@ class read_hdf5:
         
         # Potential
         if self.ispotential:
-            self.potential[istart:ifinish] = f['PartType%d/Potential' % itype][()]
+            g = f[f"PartType{itype}"]
+            for key in ("Potential", "Potentials"):
+                if key in g:
+                    print(f"Reading Potential for Particle Type {itype} as {key}")
+                    self.potential[istart:ifinish] = g[key][()]
+                    break
+        else:
+            raise KeyError("No Potential field found")
 
     def _read_gas_data(self, f, itype, istart, ifinish, jstart, extra_flags):
         """Read gas particle specific data."""
@@ -340,6 +348,10 @@ class write_hdf5:
         self.output_convention=output_convention
         self.idx = idx
         self.idx_type = idx_type
+        if not hasattr(self, "name_of_u_block"):
+            self.name_of_u_block = "InternalEnergy"
+        if not hasattr(self, "name_of_mass_block"):
+            self.name_of_mass_block = "Masses"
                 
     def write_hdf5_snapshot(self, output_file):
         filename = output_file + ".hdf5"
