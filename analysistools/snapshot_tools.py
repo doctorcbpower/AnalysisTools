@@ -154,26 +154,41 @@ class SnapshotTools:
         )
     
     def _transfer_attributes_to_reader(self, reader):
-        """Transfer required snapshot metadata to the reader."""
+        """Transfer snapshot metadata to the reader."""
 
         required = {
             "snaproot": getattr(self, "snaproot", None),
             "snapfileformat": self.snapfileformat,
             "ismultifile": self.is_multifile,
+        }
+
+        optional = {
             "dm_type": self.dm_type,
             "gas_type": self.gas_type,
             "star_type": self.star_type,
             "bh_type": self.bh_type,
+            "positions_type": self.positions_type,
+            "positions_only": self.positions_only,
             "pids_type": self.pids_type,
             "extra_blocks": self.extra_blocks,
+            "hires_only": self.hires_only,
+            "get_ptypes": self.get_ptypes,
+            "not_hires_ptypes": self.not_hires_ptypes,
+            "num_part_type": self.num_part_type,
         }
 
+        # Required: must exist
         for name, value in required.items():
             if value is None:
                 raise AttributeError(
                     f"SnapshotTools missing required attribute '{name}' for reader"
                 )
             setattr(reader, name, value)
+
+        # Optional: override reader defaults
+        for name, value in optional.items():
+            if value is not None:
+                setattr(reader, name, value)
     
     def _transfer_attributes_to_writer(self, writer):
         """Transfer configuration attributes to the writer instance."""

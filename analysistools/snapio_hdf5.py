@@ -19,7 +19,17 @@ class read_hdf5:
     """
 
     def __init__(self):
-        pass
+        self._set_defaults()
+
+    def _set_defaults(self):
+        self.positions_type = "float32"
+        self.positions_only = False
+        self.hires_only = False
+        self.get_ptypes = False
+        self.extra_blocks = []
+        self.pids_type = 32
+        self.not_hires_ptypes = [2, 3, 7]
+        self.num_part_type = 6
         
     def read_hdf5_snapshot(self,snapfilename: Optional[str] = None,convention: Optional[str] = None):
         """Main function to read HDF5 snapshot data."""
@@ -274,6 +284,7 @@ class read_hdf5:
                     self.mass[istart:ifinish] = f['PartType%d/Masses' % itype][()]
         else:
             self.mass[istart:ifinish] = self.mass_table[itype]
+        print(self.ispotential)
         
         # Potential
         if self.ispotential:
@@ -283,8 +294,8 @@ class read_hdf5:
                     print(f"Reading Potential for Particle Type {itype} as {key}")
                     self.potential[istart:ifinish] = g[key][()]
                     break
-        else:
-            raise KeyError("No Potential field found")
+                else:
+                    raise KeyError("No Potential field found")
 
     def _read_gas_data(self, f, itype, istart, ifinish, jstart, extra_flags):
         """Read gas particle specific data."""
