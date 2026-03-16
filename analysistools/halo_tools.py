@@ -41,7 +41,7 @@ class HaloTools:
     Examples
     --------
     >>> ht = HaloTools(comoving_units=True)
-    >>> halos = ht.read_catalogue(halocat_filename="groups_010.hdf5",halocat_fileformat="SubFind")
+    >>> halos = ht.read_catalogue(filename="groups_010.hdf5",fileformat="SubFind")
     >>> ht.summary()
     """
 
@@ -64,7 +64,6 @@ class HaloTools:
         }
 
         self.comoving_units = comoving_units
-        self.filename: Optional[str] = None
         self.metadata: Dict[str, Any] = {}
         self.halos: Optional[Dict[str, np.ndarray]] = None
         self.subhalos: Optional[Dict[str, np.ndarray]] = None
