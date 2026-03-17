@@ -26,7 +26,7 @@ from .common import _redshift_table, parse_subvolumes
 # ---------------------------------------------------------------------------
 # Field catalogue
 # ---------------------------------------------------------------------------
-# Maps a logical group name to the HDF5 (group, dataset) pairs needed.
+# Maps a logical group name to the HDF5 (group, dataset) pairs needed
 # Analysis code requests fields by logical name; SharkModel fetches only
 # what is actually needed.
 
@@ -35,20 +35,64 @@ GALAXY_FIELDS: Dict[str, Tuple[str, str]] = {
     # Stellar masses
     "mstars_disk":      ("galaxies", "mstars_disk"),
     "mstars_bulge":     ("galaxies", "mstars_bulge"),
+    "mstars_burst_mergers":   ("galaxies", "mstars_burst_mergers"),
+    "mstars_burst_diskinstabilities": ("galaxies", "mstars_burst_diskinstabilities"),
+    # Stellar metal masses
+    "mstars_metals_disk":  ("galaxies", "mstars_metals_disk"),
+    "mstars_metals_bulge": ("galaxies", "mstars_metals_bulge"),
     # Cold gas
     "mgas_disk":        ("galaxies", "mgas_disk"),
     "mgas_bulge":       ("galaxies", "mgas_bulge"),
+    "matom_disk":       ("galaxies", "matom_disk"),     
+    "matom_bulge":      ("galaxies", "matom_bulge"),     
+    "mmol_disk":        ("galaxies", "mmol_disk"),      
+    "mmol_bulge":       ("galaxies", "mmol_bulge"),    
+    # ISM metal masses
+    "mgas_metals_disk": ("galaxies", "mgas_metals_disk"),
+    "mgas_metals_bulge":("galaxies", "mgas_metals_bulge"),
+    # Hot gas
+    "mhot":             ("galaxies", "mhot"),
+    "mhot_metals":      ("galaxies", "mhot_metals"),
+    "mhot_stripped":    ("galaxies", "mhot_stripped"),    
+    # Ejected / reheated gas  
+    "mreheated":        ("galaxies", "mreheated"),
+    "mreheated_metals": ("galaxies", "mreheated_metals"),
+    "mlost":            ("galaxies", "mlost"),         
+    "mlost_metals":     ("galaxies", "mlost_metals"),
+    # Ram-pressure stripped ISM  
+    "mism_stripped":          ("galaxies", "mism_stripped"),
+    "mism_metals_stripped":   ("galaxies", "mism_metals_stripped"),
     # Halo / subhalo masses
     "mvir_hosthalo":    ("galaxies", "mvir_hosthalo"),
     "mvir_subhalo":     ("galaxies", "mvir_subhalo"),
+    "vmax_subhalo":     ("galaxies", "vmax_subhalo"),     
+    "cnfw_subhalo":     ("galaxies", "cnfw_subhalo"),     
     # Sizes
     "rstar_disk":       ("galaxies", "rstar_disk"),
     "rstar_bulge":      ("galaxies", "rstar_bulge"),
+    "rgas_disk":        ("galaxies", "rgas_disk"),
+    "rgas_bulge":       ("galaxies", "rgas_bulge"),
     # Star formation
     "sfr_disk":         ("galaxies", "sfr_disk"),
-    "sfr_bulge":        ("galaxies", "sfr_bulge"),
+    "sfr_bulge":        ("galaxies", "sfr_burst"),
+    "sfr_burst_mergers":   ("galaxies", "sfr_burst_mergers"),
+    "sfr_burst_diskins":   ("galaxies", "sfr_burst_diskins"),
     # Black holes
-    "mbh":              ("galaxies", "mbh"),
+    "mbh":              ("galaxies", "m_bh"),
+    "mbh_from_mergers": ("galaxies", "m_bh_assembly"),
+    "bh_acc_hothalo":   ("galaxies", "bh_accretion_rate_hh"),
+    "bh_acc_starburst": ("galaxies", "bh_accretion_rate_sb"),
+    # Identifiers
+    "id_galaxy":        ("galaxies", "id_galaxy"),
+    "id_halo":          ("galaxies", "id_halo"),
+    "descendant_id_galaxy":   ("galaxies", "descendant_id_galaxy"),
+    # Positions [cMpc/h] and velocities [km/s]
+    "position_x":       ("galaxies", "position_x"),
+    "position_y":       ("galaxies", "position_y"),
+    "position_z":       ("galaxies", "position_z"),
+    "velocity_x":       ("galaxies", "velocity_x"),
+    "velocity_y":       ("galaxies", "velocity_y"),
+    "velocity_z":       ("galaxies", "velocity_z"),
     # Type flag  (0=central, 1=satellite, 2=orphan)
     "type":             ("galaxies", "type"),
 }

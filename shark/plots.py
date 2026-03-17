@@ -42,7 +42,7 @@ _AXIS_DEFAULTS: Dict[str, dict] = {
     "halo_mf": dict(
         xmin=6.0, xmax=15.0, ymin=-10.0, ymax=-1.0,
         xtit=r"$\log_{10}(M_{\rm halo}\,/\,M_\odot)$",
-        ytit=r"$\log_{10}(\phi\,[\rm Mpc^{-3}\,dex^{-1}])$",
+        ytit=r"$\log_{10}(dn/d\log_{10}M\,[\rm Mpc^{-3}\,dex^{-1}])$",
         locators=(0.1, 1, 0.1),
     ),
     "stellar_mf": dict(
