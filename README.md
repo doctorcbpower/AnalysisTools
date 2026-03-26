@@ -1,39 +1,166 @@
-## AnalysisTools - scripting tools for analysing astrophysical simulations
+# AnalysisTools
 
-These assume simulations are GADGET2/3/4, Arepo, or SWIFT-based. It is straightforward(-ish) to add additional functionality for other codes.
+**AnalysisTools** is a Python toolkit for working with particle-based simulation data, designed for **cosmological simulations and galaxy formation studies**.
 
-Install using `pip install -e .`.
+It provides simple, flexible tools to:
 
-Load as python module, `import analysistools`
+-   Read and write simulation snapshots (HDF5)
+-   Extract and manipulate particle data
+-   Interface with halo catalogues and merger trees
+-   Perform basic analysis workflows
+-   Work with outputs from the **SHARK** semi-analytic model
 
-You can then load data using,
-```
-snap = analysistools.snapshot_tools.SnapshotTools(snapfileformat="HDF5")
-data = snap.read_snapshot("./snapshot_122", convention="GADGET4") # Omit the suffix of the snapshot
-```
-and then access the data with `snap.pos`, `snap.vel`, etc...
+------------------------------------------------------------------------
 
-You can separate particles by type,
-```
-snap.LoadParticlesByType(part_type="all")    # Can be all, gas, star, bh
-```
-and then access with `snap.dm.pos`, `snap.dm.vel`.
+## Installation
 
-You can apply conversions to comoving/physical and to length/h or simply length using
-```
-snap.UnitConversion('convert_to_comoving','convert_to_per_littleh')    # Alterantives are convert_to_physical and convert_to_littleh
+``` bash
+git clone https://github.com/doctorcbpower/AnalysisTools.git
+cd AnalysisTools
+pip install -e .
 ```
 
-If you want to write a snapshot (say, converting between formats, or only a subset of particles), you can use,
+------------------------------------------------------------------------
+
+## Quick Examples
+
+### 1. Load a Snapshot
+
+``` python
+from analysistools import SnapshotTools
+
+snap = SnapshotTools("snapshot_122")
 ```
+
+------------------------------------------------------------------------
+
+### 2. Select Particles and Write a New Snapshot
+
+``` python
+import numpy as np
+
+mask = ...  # e.g. particles within a halo
 idx = np.where(mask)[0]
 ptype = np.ones(len(idx), dtype=np.int64)
 
-snap.write_snapshot(filename='/Users/00075868/CurrentWork/Dorcha/zoom/snap_122.cube',
-                    file_format='HDF5',
-                    convention='GADGET4',
-                    idx=idx,
-                    idx_type=ptype)
+snap.write_snapshot(
+    filename="snap_122_subset.hdf5",
+    idx=idx,
+    idx_type=ptype,
+    convention="GADGET4",
+    blocks_to_write=["pos", "vel", "pids", "mass"],
+)
 ```
 
+------------------------------------------------------------------------
 
+### 3. Add Metadata to Output Snapshots
+
+``` python
+snap.write_snapshot(
+    filename="snap_122_halo.hdf5",
+    idx=idx,
+    idx_type=ptype,
+    halo_centre=halo_centre,
+    halo_systemic_velocity=halo_velocity,
+    halo_extent=halo_extent,
+    run_label="ZoomRun",
+    periodic=1,
+)
+```
+
+These values are written to the **HDF5 header**.
+
+------------------------------------------------------------------------
+
+### 4. Working with Halo Catalogues
+
+``` python
+from analysistools import HaloCatalogue
+
+cat = HaloCatalogue("halo_catalogue_122")
+
+# Access halo properties
+masses = cat["mass"]
+centres = cat["centre"]
+
+# Select a halo
+halo_id = 10
+centre = centres[halo_id]
+```
+
+------------------------------------------------------------------------
+
+### 5. Merger Trees
+
+``` python
+from analysistools import MergerTree
+
+tree = MergerTree("tree_file")
+
+# Follow a halo through time
+history = tree.get_main_branch(halo_id)
+```
+
+------------------------------------------------------------------------
+
+### 6. SHARK Semi-Analytic Model
+
+``` python
+from analysistools import SharkData
+
+shark = SharkData("shark_output.hdf5")
+
+stellar_mass = shark["stellar_mass"]
+sfr = shark["sfr"]
+```
+
+------------------------------------------------------------------------
+
+## Snapshot Writing
+
+The main interface is:
+
+``` python
+snap.write_snapshot(...)
+```
+
+Key features: - Select particles using `idx` - Control particle types via `idx_type` - Choose which datasets to write (`blocks_to_write`) - Attach metadata via keyword arguments
+
+Default blocks:
+
+``` python
+["pos", "vel", "pids", "mass"]
+```
+
+------------------------------------------------------------------------
+
+## Supported Data Blocks
+
+-   `pos`, `vel`, `pids`, `mass`
+-   `u`, `rho`, `hsml`
+-   `gas_Z`, `stellar_Z`
+-   `sfr`, `age`, `initmass`
+
+------------------------------------------------------------------------
+
+## Status
+
+Active development. The core snapshot tools are stable; additional functionality (trees, SHARK, analysis helpers) is evolving.
+
+------------------------------------------------------------------------
+
+## Authors
+
+Chris Power\
+University of Western Australia
+
+Balu Sreedhar\
+University of Seville
+
+------------------------------------------------------------------------
+
+## Notes
+
+This code is designed for research workflows and assumes familiarity
+with simulation data formats.
