@@ -8,8 +8,8 @@ Load as python module, `import analysistools`
 
 You can then load data using,
 ```
-snap = analysistools.SnapshotTools(snapfileformat="HDF5");
-data = snap.read_snapshot("./data/snap_0031", convention="SWIFT")  # Omit the suffix of the snapshot
+snap = analysistools.snapshot_tools.SnapshotTools(snapfileformat="HDF5")
+data = snap.read_snapshot("./snapshot_122", convention="GADGET4") # Omit the suffix of the snapshot
 ```
 and then access the data with `snap.pos`, `snap.vel`, etc...
 
@@ -26,10 +26,14 @@ snap.UnitConversion('convert_to_comoving','convert_to_per_littleh')    # Alteran
 
 If you want to write a snapshot (say, converting between formats, or only a subset of particles), you can use,
 ```
-idx_type=snap.ParticleOffsetsByType(snap.num_part_total)
-import numpy as np
-snap.write_snapshot("./data/snapshot_031",idx=np.arange(snap.pids.size),idx_type=idx_type,convention="arepo",
-                    blocks_to_write=['pos','vel'])
+idx = np.where(mask)[0]
+ptype = np.ones(len(idx), dtype=np.int64)
+
+snap.write_snapshot(filename='/Users/00075868/CurrentWork/Dorcha/zoom/snap_122.cube',
+                    file_format='HDF5',
+                    convention='GADGET4',
+                    idx=idx,
+                    idx_type=ptype)
 ```
 
 
