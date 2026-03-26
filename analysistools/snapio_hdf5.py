@@ -2,6 +2,8 @@
 Module: snapio_hdf5 contains ReadHDF5 and WriteHDF5, which provide tools to read and write HDF5 files given
 a particular convention.
 """
+from tokenize import group
+
 import h5py
 import numpy as np
 import os
@@ -355,10 +357,13 @@ class write_hdf5:
         self._transfer_attributes_to_writer(writer)
         writer.write_hdf5_snapshot(snapfilename=filename,convention=convention)
     """
-    def __init__(self, output_convention, idx, idx_type):
+    def __init__(self, output_convention, idx, idx_type, **metadata):
         self.output_convention=output_convention
         self.idx = idx
-        self.idx_type = idx_type
+        self.ptype = idx_type
+
+        self.metadata = metadata  # store any extra information
+
         if not hasattr(self, "name_of_u_block"):
             self.name_of_u_block = "InternalEnergy"
         if not hasattr(self, "name_of_mass_block"):
@@ -367,13 +372,24 @@ class write_hdf5:
     def write_hdf5_snapshot(self, output_file):
         filename = output_file + ".hdf5"
         print(f"Writing data to {filename} in {self.output_convention.upper()} format.")
-    
+   
+        counts = np.bincount(self.ptype, minlength=6)
+        self.num_part_this_file = counts.astype(np.int64)
+        self.num_part_total = self.num_part_this_file.copy()
+
+        # default mass table if missing
+        if not hasattr(self, "mass_table"):
+            self.mass_table = np.zeros(6) 
+        
         with h5py.File(filename, "w") as f:
             self._write_header(f)
             self._write_particles(f,name_of_u_block=self.name_of_u_block,name_of_mass_block=self.name_of_mass_block)
 
     def _write_header(self, f) -> None:
         header = f.create_group("Header")
+        if self.metadata:
+            for key, value in self.metadata.items():
+                header.attrs[key] = value
         base_attrs = {
             "NumFilesPerSnapshot": getattr(self,'num_files',1),
             "NumPart_Total": self.num_part_total,
@@ -430,7 +446,7 @@ class write_hdf5:
         if selection is not None:
             header.attrs.update({
                 "Halo Centre": self.halo_centre,
-                "Halo Systemic Velocity": self.halo_systemtic_velocity,
+                "Halo Systemic Velocity": self.halo_systemic_velocity,
                 "Halo Extent": self.halo_extent,
             })
 
@@ -463,41 +479,44 @@ class write_hdf5:
             })
 
     def _write_particles(self, f, **kwargs):
-        for i, npart in enumerate(self.num_part_total):
-            if npart > 0:
+            for i in range(6):
+                mask = (self.ptype == i)
+                if not np.any(mask):
+                    continue
                 group = f.create_group(f"PartType{i}")
                 if getattr(self,'pos',None) is not None:
-                    self._write_positions(group, i, self.idx, self.idx_type)
+                    self._write_positions(group, i, mask)
                 if getattr(self,'vel',None) is not None:
-                    self._write_velocities(group, i, self.idx, self.idx_type)
+                    self._write_velocities(group, i, mask)
                 if getattr(self,'pids',None) is not None:
-                    self._write_ids(group, i, self.idx, self.idx_type)
+                    self._write_ids(group, i, mask)
                 if getattr(self,'mass',None) is not None:
-                    self._write_masses(group, i, self.idx, self.idx_type, kwargs.get("name_of_mass_block", "Masses"))
+                    self._write_masses(group, i, mask, kwargs.get("name_of_mass_block", "Masses"))
                 if getattr(self,'u',None) is not None and i==getattr(self,'gas_type',0):
-                    self._write_internal_energies(group, i, self.idx[self.idx_type[self.gas_type]:self.idx_type[self.gas_type+1]], self.idx_type, kwargs.get("name_of_u_block", "InternalEnergy"))
+                    self._write_internal_energies(group, i, mask, kwargs.get("name_of_u_block", "InternalEnergy"))
                 if getattr(self,'rho',None) is not None and i==getattr(self,'gas_type',0):
-                    self._write_densities(group, i, self.idx[self.idx_type[self.gas_type]:self.idx_type[self.gas_type+1]], self.idx_type)
+                    self._write_densities(group, i, mask)
                 if getattr(self,'hsml',None) is not None:
                     if i==getattr(self,'gas_type',0):
-                        self._write_smoothing_lengths(group, i, self.idx, self.idx_type)
+                        self._write_smoothing_lengths(group, i, mask)
                     elif i==getattr(self,'star_type',4):
-                        self._write_smoothing_lengths(group, i, self.idx, self.idx_type)
+                        self._write_smoothing_lengths(group, i, mask)
                 if getattr(self,'gas_Z',None) is not None and i==getattr(self,'gas_type',0):
-                    self._write_metallicities(group, i, self.idx[self.idx_type[self.gas_type]:self.idx_type[self.gas_type+1]], self.idx_type,metallicity_type='gas')
+                    self._write_metallicities(group, i, mask, metallicity_type='gas')
                 if getattr(self,'stellar_Z',None) is not None and i==getattr(self,'star_type',4):
-                    self._write_metallicities(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type,metallicity_type='stellar')
+                    self._write_metallicities(group, i, mask, metallicity_type='stellar')
                 if getattr(self,'sfr',None) is not None and i==getattr(self,'star_type',4):
-                    self._write_star_formation_rates(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type)
+                    self._write_star_formation_rates(group, i, mask)
                 if getattr(self,'age',None) is not None and i==getattr(self,'star_type',4):
-                    self._write_stellar_ages(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type)
+                    self._write_stellar_ages(group, i, mask)
                 if getattr(self,'initmass',None) is not None and i==getattr(self,'star_type',4):
-                    self._write_stellar_init_mass(group, i, self.idx[self.idx_type[self.star_type]:self.idx_type[self.star_type+1]], self.idx_type)
+                    self._write_stellar_init_mass(group, i, mask)
 
-    def _write_positions(self, group, i, idx, idx_type):
+    def _write_positions(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_pos = group.create_dataset(
             "Coordinates",
-            data=self.pos[idx][idx_type[i]:idx_type[i+1]],
+            data=self.pos[idx_i],
         )
         data_pos.attrs.update({
             "CGSConversionFactor": self.unit_length_in_cgs,
@@ -505,10 +524,11 @@ class write_hdf5:
             "h-scale-exponent": -1,
         })
 
-    def _write_velocities(self, group, i, idx, idx_type):
+    def _write_velocities(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_vel = group.create_dataset(
             "Velocities",
-            data=self.vel[idx][idx_type[i]:idx_type[i+1]],
+            data=self.vel[idx_i],
         )
         data_vel.attrs.update({
             "CGSConversionFactor": self.unit_velocity_in_cgs,
@@ -516,10 +536,11 @@ class write_hdf5:
             "h-scale-exponent": 0,
         })
         
-    def _write_ids(self, group, i, idx, idx_type):
+    def _write_ids(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_pids = group.create_dataset(
             "ParticleIDs",
-            data=self.pids[idx][idx_type[i]:idx_type[i+1]],
+            data=self.pids[idx_i],
         )
         data_pids.attrs.update({
             "CGSConversionFactor": 1,
@@ -527,21 +548,24 @@ class write_hdf5:
             "h-scale-exponent": 0,
         })
 
-    def _write_masses(self, group, i, idx, idx_type, name_of_mass_block):
+    def _write_masses(self, group, i, mask, name_of_mass_block):
+        idx_i = self.idx[mask]
         data_mass = group.create_dataset(
             name_of_mass_block,
-            data=self.mass[idx][idx_type[i]:idx_type[i+1]],
+            data=self.mass[idx_i],
         )
+        
         data_mass.attrs.update({
             "CGSConversionFactor": self.unit_mass_in_cgs,
             "aexp-scale-exponent": 0,
             "h-scale-exponent": -1,
         })
 
-    def _write_internal_energies(self, group, i, idx, idx_type, name_of_u_block):
+    def _write_internal_energies(self, group, i, mask, name_of_u_block):
+        idx_i = self.idx[mask]
         data_u = group.create_dataset(
             name_of_u_block,
-            data=self.u[idx][idx_type[i]:idx_type[i+1]],
+            data=self.u[idx_i],
         )
         data_u.attrs.update({
             "CGSConversionFactor": self.unit_velocity_in_cgs**2,
@@ -549,10 +573,11 @@ class write_hdf5:
             "h-scale-exponent": 0,
         })
 
-    def _write_smoothing_lengths(self, group, i, idx, idx_type):
+    def _write_smoothing_lengths(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_smoothinglength = group.create_dataset(
             'SmoothingLength',
-            data=self.hsml[idx][idx_type[i]:idx_type[i+1]],
+            data=self.hsml[idx_i],
         )
         data_smoothinglength.attrs.update({
             "CGSConversionFactor": self.unit_length_in_cgs,
@@ -560,10 +585,11 @@ class write_hdf5:
             "h-scale-exponent": -1,
         })
 
-    def _write_densities(self, group, i, idx, idx_type):
+    def _write_densities(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_rho = group.create_dataset(
             'Density',
-            data=self.rho[idx][idx_type[i]:idx_type[i+1]],
+            data=self.rho[idx_i],
         )
         data_rho.attrs.update({
             "CGSConversionFactor": self.unit_density_in_cgs,
@@ -571,13 +597,13 @@ class write_hdf5:
             "h-scale-exponent": 2,
         })
 
-    def _write_metallicities(self, group, i, idx, idx_type, metallicity_type='gas'):
+    def _write_metallicities(self, group, i, mask, metallicity_type='gas'):
         """Write gas or stellar metallicities into the HDF5 group."""
-    
+        idx_i = self.idx[mask] 
         if metallicity_type == 'gas':
-            data = self.gas_metallicity[idx][idx_type[i]:idx_type[i+1]]
+            data = self.gas_metallicity[idx_i]
         elif metallicity_type == 'stellar':
-            data = self.stellar_metallicity[idx][idx_type[i]:idx_type[i+1]]
+            data = self.stellar_metallicity[idx_i]
         else:
             raise ValueError(f"Unknown metallicity_type '{metallicity_type}'")
 
@@ -588,10 +614,11 @@ class write_hdf5:
             "h-scale-exponent": 0,
         })
 
-    def _write_star_formation_rates(self, group, i, idx, idx_type):
+    def _write_star_formation_rates(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_sfr = group.create_dataset(
             'StarFormationRate',
-            data=self.gas_sfr[idx][idx_type[i]:idx_type[i+1]],
+            data=self.gas_sfr[idx_i],
         )
         data_sfr.attrs.update({
             "CGSConversionFactor": self.unit_sfr_in_cgs,
@@ -599,10 +626,11 @@ class write_hdf5:
             "h-scale-exponent": 0,
         })
 
-    def _write_stellar_ages(self, group, i, idx, idx_type):
+    def _write_stellar_ages(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_age = group.create_dataset(
             'StellarFormationTime',
-            data=self.stellarage[idx][idx_type[i]:idx_type[i+1]],
+            data=self.stellarage[idx_i],
         )
         data_age.attrs.update({
             "CGSConversionFactor": 1,
@@ -610,10 +638,11 @@ class write_hdf5:
             "h-scale-exponent": 0,
         })
 
-    def _write_stellar_init_mass(self, group, i, idx, idx_type):
+    def _write_stellar_init_mass(self, group, i, mask):
+        idx_i = self.idx[mask]
         data_stellarinitmass = group.create_dataset(
             'StellarInitMass',
-            data=self.stellarinitmass[idx][idx_type[i]:idx_type[i+1]],
+            data=self.stellarinitmass[idx_i],
         )
         data_stellarinitmass.attrs.update({
             "CGSConversionFactor": self.unit_mass_in_cgs,

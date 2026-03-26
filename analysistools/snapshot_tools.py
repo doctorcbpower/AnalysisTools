@@ -225,6 +225,36 @@ class SnapshotTools:
                         import copy as pycopy
                         data = pycopy.deepcopy(data)
                 setattr(writer, dset, data)
+    def _initialize_writer_header(self, writer, idx, idx_type):
+        # --- particle counts ---
+        num_part_this_file = np.zeros(6, dtype=np.int64)
+
+        for ptype in range(6):
+            num_part_this_file[ptype] = np.sum(idx_type == ptype)
+
+        writer.num_part_this_file = num_part_this_file
+
+        # Often required as well
+        writer.num_part_total = num_part_this_file.copy()
+
+        # --- mass table (0 = individual masses stored) ---
+        writer.mass_table = np.zeros(6, dtype=np.float64)
+
+        # --- basic cosmology / box ---
+        writer.scale_factor = getattr(self, "scale_factor", 1.0)
+        writer.box_size = getattr(self, "box_size", 0.0)
+
+        writer.omega_0 = getattr(self, "omega_0", 0.3)
+        writer.omega_lambda = getattr(self, "omega_lambda", 0.7)
+        writer.hubble_param = getattr(self, "hubble_param", 0.7)
+
+        # --- flags ---
+        writer.flag_double_precision = 1
+        writer.flag_cooling = 0
+        writer.flag_sfr = 0
+        writer.flag_stellar_age = 0
+        writer.flag_metals = 0
+        writer.flag_feedback = 0
 
     def _transfer_attributes_from_reader(self, reader):
         """Transfer data attributes from reader back to main instance."""
@@ -281,7 +311,8 @@ class SnapshotTools:
                              idx_type: np.int64,
                              file_format: str = "hdf5",
                              convention: str = "SWIFT",
-                             blocks_to_write: list[str] | None = None,
+                             blocks_to_write: list[str]| None = None,
+                             **kwargs
                        ) -> None:
         """
         Write snapshot data to file in the chosen format.
@@ -297,14 +328,19 @@ class SnapshotTools:
         blocks_to_write : list[str], optional   
             List of dataset names to include in the output. Defaults to
             ['pos', 'vel', 'pids', 'mass'].
+        Optional kwargs can include metadata like:
+        halo_centre, halo_systemic_velocity, halo_extent, run_label, etc.
         """
         blocks = blocks_to_write or ['pos', 'vel', 'pids', 'mass']
 
         self.logger.info(f"Writing snapshot '{filename}' using {self.snapfileformat}")
 
         if file_format.lower() == "hdf5":
-            writer = write_hdf5(output_convention=convention, idx=idx, idx_type=idx_type)
+            writer = write_hdf5(output_convention=convention, idx=idx, idx_type=idx_type, **kwargs)
+
             self._transfer_attributes_to_writer(writer)
+
+            self._initialize_writer_header(writer, idx=idx, idx_type=idx_type)
             """
             Options are: pos, vel, pids, mass, u, rho, hsml, gas_Z, stellar_Z,
                          sfr, age, initmass
@@ -313,6 +349,7 @@ class SnapshotTools:
             self._transfer_datasets_to_writer(writer,
                                               blocks,
                                               )
+
             writer.write_hdf5_snapshot(filename)
         else:
             raise ValueError(f"Unsupported snapshot format: {file_format}")
