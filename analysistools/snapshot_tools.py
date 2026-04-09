@@ -327,11 +327,11 @@ class SnapshotTools:
             Code convention to use - determines the names of blocks
         blocks_to_write : list[str], optional   
             List of dataset names to include in the output. Defaults to
-            ['pos', 'vel', 'pids', 'mass'].
+            ['pos', 'vel', 'pids', 'mass', 'groupid'].
         Optional kwargs can include metadata like:
         halo_centre, halo_systemic_velocity, halo_extent, run_label, etc.
         """
-        blocks = blocks_to_write or ['pos', 'vel', 'pids', 'mass']
+        blocks = blocks_to_write or ['pos', 'vel', 'pids', 'mass', 'groupid']
 
         self.logger.info(f"Writing snapshot '{filename}' using {self.snapfileformat}")
 
@@ -343,7 +343,7 @@ class SnapshotTools:
             self._initialize_writer_header(writer, idx=idx, idx_type=idx_type)
             """
             Options are: pos, vel, pids, mass, u, rho, hsml, gas_Z, stellar_Z,
-                         sfr, age, initmass
+                         sfr, age, initmass, groupid
             """
 
             self._transfer_datasets_to_writer(writer,
@@ -449,6 +449,9 @@ class SnapshotTools:
             if hasattr(self, 'rho'):
                 kwargs['density'] = self.rho[start:end]
         
+        if hasattr(self, 'groupid'):
+            kwargs['groupid'] = self.groupid[start:end]
+        
         return self.ParticleProperties(
             self.pos[start:end],
             self.vel[start:end],
@@ -473,6 +476,8 @@ class SnapshotTools:
                 self.internal_energy = kwargs['internal_energy']
             if 'density' in kwargs:
                 self.density = kwargs['density']
+            if 'groupid' in kwargs:
+                self.groupid = kwargs['groupid']
     
     def UnitConversion(self, **kwargs):
         """

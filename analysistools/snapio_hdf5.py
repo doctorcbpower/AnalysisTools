@@ -46,7 +46,8 @@ class read_hdf5:
             name_of_mass_block = self._read_header_info(f)
             self._read_cosmological_params(f)
             self._check_potential_availability(f)
-        
+            self._check_groupid_availability(f) 
+
         # Calculate total particles and print summary
         num_part = np.sum(self.num_part_total)
         self._print_summary(num_part)
@@ -124,6 +125,13 @@ class read_hdf5:
             if 'Potential' in f['PartType1'].keys():
                 self.ispotential = True
 
+    def _check_groupid_availability(self, f):
+        """Check if groupid data is available."""
+        self.isgroupid = False
+        if 'PartType1' in list(f.keys()):
+            if 'GroupID' in f['PartType1'].keys():
+                self.isgroupid = True
+
     def _print_summary(self, num_part):
         """Print summary information about the snapshot."""
         print(f"Simulation scale factor: {self.scale_factor}")
@@ -180,6 +188,10 @@ class read_hdf5:
         if self.ispotential:
             self.potential = np.ndarray(shape=(num_part))
 
+       # Potential array
+        if self.isgroupid:
+            self.groupid = np.ndarray(shape=(num_part),dtype=np.int32)
+            
     def _allocate_extra_block_memory(self):
         """Allocate memory for extra data blocks."""
         extra_flags = {}
@@ -206,7 +218,11 @@ class read_hdf5:
                 self.potential = np.ndarray(shape=(np.sum(self.num_part_total)))
                 extra_flags['ispotential'] = True
                 self.ispotential = True
-        
+            if 'GROUPID' in self.extra_blocks:
+                self.groupid = np.ndarray(shape=(np.sum(self.num_part_total)), dtype=np.int32)
+                extra_flags['isgroupid'] = True
+                self.isgroupid = True
+
         return extra_flags
 
     def _calculate_offsets(self):
@@ -298,6 +314,16 @@ class read_hdf5:
                     break
                 else:
                     raise KeyError("No Potential field found")
+        # GroupID
+        if self.isgroupid:
+            g = f[f"PartType{itype}"]
+            for key in ("GroupID", "GroupIDs"):
+                if key in g:
+                    print(f"Reading GroupID for Particle Type {itype} as {key}")
+                    self.groupid[istart:ifinish] = g[key][()]
+                    break
+                else:
+                    raise KeyError("No GroupID field found")
 
     def _read_gas_data(self, f, itype, istart, ifinish, jstart, extra_flags):
         """Read gas particle specific data."""
@@ -492,6 +518,8 @@ class write_hdf5:
                     self._write_ids(group, i, mask)
                 if getattr(self,'mass',None) is not None:
                     self._write_masses(group, i, mask, kwargs.get("name_of_mass_block", "Masses"))
+                if getattr(self,'groupid',None) is not None:
+                    self._write_groupids(group, i, mask)
                 if getattr(self,'u',None) is not None and i==getattr(self,'gas_type',0):
                     self._write_internal_energies(group, i, mask, kwargs.get("name_of_u_block", "InternalEnergy"))
                 if getattr(self,'rho',None) is not None and i==getattr(self,'gas_type',0):
@@ -543,6 +571,18 @@ class write_hdf5:
             data=self.pids[idx_i],
         )
         data_pids.attrs.update({
+            "CGSConversionFactor": 1,
+            "aexp-scale-exponent": 0,
+            "h-scale-exponent": 0,
+        })
+
+    def _write_groupids(self, group, i, mask):
+        idx_i = self.idx[mask]
+        data_groupids = group.create_dataset(
+            "GroupIDs",
+            data=self.groupid[idx_i],
+        )
+        data_groupids.attrs.update({
             "CGSConversionFactor": 1,
             "aexp-scale-exponent": 0,
             "h-scale-exponent": 0,
