@@ -1,3 +1,4 @@
+# --- submodule imports ---
 from . import analysis_tools
 from . import snapshot_tools
 from . import snapio_hdf5
@@ -12,7 +13,14 @@ from . import profile_tools
 from . import galaxy_tools
 from . import gridding_tools
 
+# --- public class imports ---
+from .snapshot_tools import SnapshotTools
+from .halo_tools import HaloCatalogue
+from .merger_tree_tools import MergerTree
+from .galaxy_tools import SharkData
+
 __all__ = [
+    # submodules
     "analysis_tools",
     "snapshot_tools",
     "snapio_hdf5",
@@ -26,4 +34,9 @@ __all__ = [
     "profile_tools",
     "galaxy_tools",
     "gridding_tools",
+    # classes
+    "SnapshotTools",
+    "HaloCatalogue",
+    "MergerTree",
+    "SharkData",
 ]
