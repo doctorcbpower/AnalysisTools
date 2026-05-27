@@ -18,38 +18,88 @@ class read_binary:
     
     def read_binary_snapshot(self):
         """Main function to read binary snapshot data."""
-        # Determine filename
-        fileroot, filename = self._determine_binary_filename()
-        
-        # Read header
-        self._read_binary_header(filename)
-        
-        # Analyze mass structure and allocate memory
+        # Read header from the first file to get global particle counts
+        self._read_binary_header(self.snapfilename)       
+
         idx_with_mass, NumPart, NumPart_InMassBlock = self._analyze_mass_structure()
         self._allocate_binary_memory(NumPart)
-        
-        # Setup extra blocks
+
         blocknames, extra_flags = self._setup_extra_blocks_binary(NumPart)
-        
-        # Calculate offsets
         istart, ifinish = self._calculate_binary_offsets()
-        
-        # Read data from all files
-        for ifile in range(self.num_files):
-            if ifile > 0:
-                filename = fileroot + '.%d' % ifile
+
+        # Iterate over the pre-validated file list, no reconstruction needed
+        for filename in self.snapfiles:
+            istart = self._read_single_binary_file(
+                filename, istart, ifinish, idx_with_mass, blocknames, extra_flags
+            )
+
+    def _read_binary_header(self, filename):
+        """Read header information from binary snapshot file."""
+        print('Reading data from %s' % filename)
+        self.NumPartType = 6
+
+        with open(filename, 'rb') as f:
+            offset = 0
+            # Handle SNAP2 format offset - need to skip
+            # initial 4 byte buffer, 4 chars, 1 int, 4 chars, 4 byte buffer.
+            # This corresponds to 20 bytes in total, assuming a 4-byte int.
+            if self.snapfileformat == 'SNAP2':
+                offset += 20
+
+            # Read header fields sequentially
+            offset += 4
+            f.seek(offset, os.SEEK_SET)
+            self.num_part_this_file = np.fromfile(f, dtype=np.int32, count=6)
+
+            offset += 24
+            f.seek(offset, os.SEEK_SET)
+            self.mass_table = np.fromfile(f, dtype=np.float64, count=6)
             
-            istart = self._read_single_binary_file(filename, istart, ifinish, idx_with_mass,
-                                                  blocknames, extra_flags)
-
-    def _determine_binary_filename(self):
-        """Determine the correct filename for the binary snapshot."""
-        if self.ismultifile == False:
-            filename = str(self.snaproot)
-        else:
-            filename = f"{self.snaproot}.0"
-
-        return self.snaproot, filename
+            offset += 48
+            f.seek(offset, os.SEEK_SET)
+            self.scale_factor = np.fromfile(f, dtype=np.float64, count=1)[0]
+            
+            offset += 8
+            f.seek(offset, os.SEEK_SET)
+            self.redshift = np.fromfile(f, dtype=np.float64, count=1)[0]
+            
+            offset += 16
+            f.seek(offset, os.SEEK_SET)
+            self.num_part_total = np.fromfile(f, dtype=np.int32, count=6)
+            
+            offset += 28
+            f.seek(offset, os.SEEK_SET)
+            self.num_files = np.fromfile(f, dtype=np.int32, count=1)[0]
+            # FIX: don't let the header overwrite num_files — load_snapshot
+            # already counted the actual files on disk, which is authoritative.
+            # Only use the header value as a sanity check.
+            if self.num_files != len(self.snapfiles):
+                import warnings
+                warnings.warn(
+                    f"Header reports {self.num_files} file(s) but "
+                    f"{len(self.snapfiles)} were found on disk. "
+                    f"Using the on-disk count."
+                )
+            self.num_files = len(self.snapfiles)   # trust the filesystem
+            
+            offset += 4
+            f.seek(offset, os.SEEK_SET)
+            self.box_size = np.fromfile(f, dtype=np.float64, count=1)[0]
+            
+            offset += 8
+            f.seek(offset, os.SEEK_SET)
+            self.omega_0 = np.fromfile(f, dtype=np.float64, count=1)[0]
+            
+            offset += 8
+            f.seek(offset, os.SEEK_SET)
+            self.omega_lambda = np.fromfile(f, dtype=np.float64, count=1)[0]
+            
+            offset += 8
+            f.seek(offset, os.SEEK_SET)
+            self.hubble_param = np.fromfile(f, dtype=np.float64, count=1)[0]
+            
+            if self.num_files > 1:
+                print('Data is split across %d files' % self.num_files)
 
     def _read_binary_header(self, filename):
         """Read header information from binary snapshot file."""

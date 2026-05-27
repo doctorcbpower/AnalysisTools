@@ -30,7 +30,7 @@ class SnapshotTools:
     
     # Or do it in one go:
     snap = SnapshotTools(snapfileformat="HDF5")
-    data = snap.read("snap_011.hdf5")
+    data = snap.read("snap_010.hdf5")
     """
     
     def __init__(
@@ -70,6 +70,7 @@ class SnapshotTools:
         self.not_hires_ptypes = kwargs.get("not_hires_ptypes", [2, 3, 7])
         self.isics = kwargs.get("isics", False)
         self.is_multifile = False
+        self.binary_suffix = kwargs.get("binary_suffix",".dat")   # NEW
                 
         # Set num_part_type for consistency
         self.num_part_type = 6
@@ -107,45 +108,57 @@ class SnapshotTools:
 
         # Strip known suffixes to get a clean base
         base = snapfilename
-        for suffix in (".hdf5", ".0.hdf5", ".0"):
+        for suffix in (".hdf5", ".0.hdf5", ".0", self.binary_suffix):
             if base.endswith(suffix):
                 base = base[: -len(suffix)]
+                break  # only strip one suffix
 
         self.snaproot = base
-        
+
         # --- probe filesystem ---
         hdf5_single = base + ".hdf5"
         hdf5_multi  = sorted(glob.glob(base + ".[0-9]*.hdf5"))
+        bin_single  = base + self.binary_suffix                              # NEW: single binary
         bin_multi   = sorted(glob.glob(base + ".[0-9]*"))
+        bin_multi   = [f for f in bin_multi if not f.endswith(".hdf5")]
 
-        # Remove false positives (binary files that are actually hdf5)
-        bin_multi = [f for f in bin_multi if not f.endswith(".hdf5")]
-
-        # --- decide format and layout ---
         if os.path.exists(hdf5_single):
-            self.is_multifile = False
-            self.snapbase = base
-            self.snapfilename = hdf5_single
-            self.num_files = 1
+            self.snapfileformat = "HDF5"
+            self.is_multifile   = False
+            self.snapfilename   = hdf5_single
+            self.snapfiles      = [hdf5_single]
+            self.num_files      = 1
 
         elif hdf5_multi:
-            self.is_multifile = True
-            self.snapbase = base
-            self.snapfilename = hdf5_multi[0]
-            self.num_files = len(hdf5_multi)
+            self.snapfileformat = "HDF5"
+            self.is_multifile   = True
+            self.snapfilename   = hdf5_multi[0]
+            self.snapfiles      = hdf5_multi
+            self.num_files      = len(hdf5_multi)
+
+        elif bin_single and os.path.isfile(bin_single):
+            self.is_multifile = False
+            self.snapfilename = bin_single
+            self.snapfiles    = [bin_single]
+            self.num_files    = 1
+            if self.snapfileformat not in {"SNAP1", "SNAP2"}:
+                self.snapfileformat = "SNAP2"
 
         elif bin_multi:
             self.is_multifile = True
-            self.snapbase = base
             self.snapfilename = bin_multi[0]
-            self.num_files = len(bin_multi)
-
+            self.snapfiles    = bin_multi
+            self.num_files    = len(bin_multi)
+            if self.snapfileformat not in {"SNAP1", "SNAP2"}:
+                self.snapfileformat = "SNAP2" 
         else:
             raise FileNotFoundError(
                 f"No snapshot found for '{snapfilename}'. "
-                f"Tried HDF5 and binary (single and multi-file)."
+                f"Tried: '{hdf5_single}', multi-file HDF5, "
+                f"'{bin_single}', and numbered binary files."
             )
 
+        self.snapbase = base
         self.logger.info(
             f"Snapshot detected: format={self.snapfileformat}, "
             f"multifile={self.is_multifile}, "
@@ -158,8 +171,10 @@ class SnapshotTools:
 
         required = {
             "snaproot": getattr(self, "snaproot", None),
+            "snapfilename":  getattr(self, "snapfilename", None),  
             "snapfileformat": self.snapfileformat,
             "ismultifile": self.is_multifile,
+            "snapfiles": getattr(self, "snapfiles", None),
         }
 
         optional = {
@@ -175,6 +190,7 @@ class SnapshotTools:
             "get_ptypes": self.get_ptypes,
             "not_hires_ptypes": self.not_hires_ptypes,
             "num_part_type": self.num_part_type,
+            "isics": self.isics,
         }
 
         # Required: must exist
