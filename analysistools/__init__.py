@@ -8,6 +8,7 @@ from . import haloio_subfind
 from . import haloio_swiftfof
 from . import haloio_ahf
 from . import haloio_velociraptor
+from . import ic_tools
 from . import merger_tree_tools
 from . import profile_tools
 from . import gridding_tools
@@ -15,7 +16,9 @@ from . import gridding_tools
 # --- public class imports ---
 from .snapshot_tools import SnapshotTools
 from .halo_tools import HaloTools
+from .ic_tools import ICTools
 from .merger_tree_tools import TreeTools
+from .gridding_tools import GriddingTools
 
 __all__ = [
     # submodules
@@ -28,11 +31,14 @@ __all__ = [
     "haloio_swiftfof",
     "haloio_ahf",
     "haloio_velociraptor",
+    "ic_tools",
     "merger_tree_tools",
     "profile_tools",
     "gridding_tools",
     # classes
     "SnapshotTools",
     "HaloCatalogue",
+    "ICTools",
     "MergerTree",
+    "GriddingTools",
 ]

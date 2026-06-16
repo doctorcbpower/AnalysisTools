@@ -1,5 +1,7 @@
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
+from scipy.spatial import Voronoi
+from matplotlib.collections import LineCollection
 
 import numpy as np
 
@@ -357,4 +359,139 @@ class GriddingTools:
 
         plt.tight_layout()
         return fig, axes
+        
+    def slice_nearest_neighbour(self, positions, field,
+                                 width, height,
+                                 Xpixels, Ypixels,
+                                 slice_axis='z', slice_value=0.0,
+                                 max_distance=None):
+        """
+        Produce a 2D image by nearest-neighbour lookup along a slice plane.
 
+        Parameters
+        ----------
+        positions : ndarray (N, 3)
+            Particle positions, already centred on the region of interest.
+        field : ndarray (N,)
+            Field values (e.g. density) per particle.
+        width, height : float
+            Physical extent of the output image.
+        Xpixels, Ypixels : int
+            Output image resolution.
+        slice_axis : str
+            Axis normal to the slice plane: 'x', 'y', or 'z'.
+        slice_value : float
+            Position along slice_axis to query (default 0, i.e. centred).
+        max_distance: float
+            Maximum distance a particle can be from the plane
+        Returns
+        -------
+        image : ndarray (Ypixels, Xpixels)
+        extent : list [xmin, xmax, ymin, ymax]
+        """
+        axis_map = {'x': 0, 'y': 1, 'z': 2}
+        normal   = axis_map[slice_axis]
+        plane    = [i for i in range(3) if i != normal]
+
+        tree = cKDTree(positions)
+
+        x = np.linspace(-width/2,  width/2,  Xpixels)
+        y = np.linspace(-height/2, height/2, Ypixels)
+        X, Y = np.meshgrid(x, y)
+
+        # Build query points in 3D
+        query = np.zeros((Xpixels * Ypixels, 3))
+        query[:, plane[0]] = X.ravel()
+        query[:, plane[1]] = Y.ravel()
+        query[:, normal]   = slice_value
+
+        dist, idx = tree.query(query, k=1)
+        field_mapped = field[idx].astype(float)
+
+        # Mask pixels where nearest neighbour was too far from the slice plane
+        if max_distance is not None:
+            field_mapped[dist > max_distance] = np.nan
+
+        image  = field[idx].reshape(Ypixels, Xpixels)
+        extent = [-width/2, width/2, -height/2, height/2]
+
+        return image, extent
+
+    def plot_voronoi_slice(self, positions,
+                           width, height,
+                           slice_axis='z', slice_value=0.0,
+                           max_distance=None,
+                           figsize=(8, 8), title=None):
+
+        axis_map = {'x': 0, 'y': 1, 'z': 2}
+        normal   = axis_map[slice_axis]
+        plane_ax = [i for i in range(3) if i != normal]
+
+        # Estimate default before mask is applied
+        if max_distance is None:
+            n_total = np.sum(
+                (positions[:, plane_ax[0]] > -width/2)  &
+                (positions[:, plane_ax[0]] <  width/2)  &
+                (positions[:, plane_ax[1]] > -height/2) &
+                (positions[:, plane_ax[1]] <  height/2)
+            )
+            max_distance = np.sqrt((width * height) / n_total) if n_total > 0 else width * 0.01
+
+        mask = (
+            (np.abs(positions[:, normal] - slice_value) < max_distance) &
+            (positions[:, plane_ax[0]] > -width/2)  &
+            (positions[:, plane_ax[0]] <  width/2)  &
+            (positions[:, plane_ax[1]] > -height/2) &
+            (positions[:, plane_ax[1]] <  height/2)
+        )
+
+        pts_2d = positions[mask][:, plane_ax]
+
+        print(f"Plotting Voronoi for {mask.sum()} particles, "
+              f"mean spacing ~ {max_distance:.4f}")
+
+        # Mirror points to cleanly bound edge cells — no infinite ridges
+        pad = max(width, height) * 2
+        for px, py in [( pad, 0), (-pad, 0), (0,  pad), (0, -pad),
+                       ( pad,  pad), (-pad,  pad),
+                       ( pad, -pad), (-pad, -pad)]:
+            pass  # built below
+        mirrors = np.array([
+            [ pad,  0], [-pad,  0], [0,  pad], [0, -pad],
+            [ pad,  pad], [-pad,  pad], [ pad, -pad], [-pad, -pad]
+        ])
+        pts_ext = np.vstack([pts_2d, mirrors])
+
+        vor = Voronoi(pts_ext)
+
+        # Collect only finite ridge segments, clipped to plot box
+        xmin, xmax = -width/2,  width/2
+        ymin, ymax = -height/2, height/2
+
+        segments = []
+        for ridge in vor.ridge_vertices:
+            if -1 in ridge:
+                continue  # skip infinite ridges entirely
+            p1, p2 = vor.vertices[ridge[0]], vor.vertices[ridge[1]]
+            # Only keep segments whose midpoint is inside the plot box
+            mid = (p1 + p2) / 2
+            if xmin <= mid[0] <= xmax and ymin <= mid[1] <= ymax:
+                segments.append([p1, p2])
+
+        fig, ax = plt.subplots(figsize=figsize)
+        lc = LineCollection(segments, colors='k', linewidths=0.4)
+        ax.add_collection(lc)
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+
+        axis_labels = ['x (pc)', 'y (pc)', 'z (pc)']
+        ax.set_xlabel(axis_labels[plane_ax[0]])
+        ax.set_ylabel(axis_labels[plane_ax[1]])
+        ax.set_aspect('equal')
+
+        if title:
+            ax.set_title(title)
+
+        plt.tight_layout()
+        return fig, ax

@@ -321,7 +321,7 @@ def read_data_ext(model_dir, snapshot, fields, subvolumes, dustmodel):
 
 
 def read_sfh(model_dir, snapshot, fields, subvolumes, include_h0_volh=True):
-    """Read the galaxies.hdf5 file for the given model/snapshot/subvolume"""
+    """Read the star_formation_histories.hdf5 file for the given model/snapshot/subvolume"""
 
     data = collections.OrderedDict()
     for idx, subv in enumerate(subvolumes):
@@ -332,8 +332,10 @@ def read_sfh(model_dir, snapshot, fields, subvolumes, include_h0_volh=True):
             if idx == 0:
                 delta_t = f['delta_t'][()]
                 LBT     = f['lbt_mean'][()]
-
+            
             for gnames, dsname in fields.items():
+                if gnames not in f or dsname not in f[gnames]:
+                    continue
                 group = f[gnames]
                 full_name = '%s/%s' % (gnames, dsname)
                 l = data.get(full_name, None)
@@ -343,10 +345,13 @@ def read_sfh(model_dir, snapshot, fields, subvolumes, include_h0_volh=True):
                     l = np.concatenate([l, group[dsname][()]])
                 data[full_name] = l
 
+            if not data:
+                return [], delta_t, LBT
+
     return list(data.values()), delta_t, LBT
 
 def read_bhh(model_dir, snapshot, fields, subvolumes, include_h0_volh=True):
-    """Read the galaxies.hdf5 file for the given model/snapshot/subvolume"""
+    """Read the black_hole_histories.hdf5 file for the given model/snapshot/subvolume"""
 
     data = collections.OrderedDict()
     for idx, subv in enumerate(subvolumes):

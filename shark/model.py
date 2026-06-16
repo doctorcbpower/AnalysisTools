@@ -19,6 +19,7 @@ import os
 from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
 import numpy as np
+import h5py
 
 from . import common
 from .common import _redshift_table, parse_subvolumes
@@ -97,6 +98,16 @@ GALAXY_FIELDS: Dict[str, Tuple[str, str]] = {
     "type":             ("galaxies", "type"),
 }
 
+#: Fields available from star_formation_histories.hdf5.
+#: Maps logical name -> (hdf5_group, dataset).
+#: delta_t and lbt_mean are snapshot-level scalars, not per-galaxy arrays;
+#: they are stored separately in _sfh_meta rather than _cache.
+SFH_FIELDS: Dict[str, Tuple[str, str]] = {
+    "sfh_disk":          ("disks", "star_formation_rate_histories"),
+    "sfh_bulge":         ("bulges_diskins", "star_formation_rate_histories"),
+    "sfh_metals_disk":   ("disks", "metallicity_histories"),
+    "sfh_metals_bulge":  ("bulges_diskins", "metallicity_histories"),
+}
 
 # ---------------------------------------------------------------------------
 # SharkModel
@@ -147,6 +158,8 @@ class SharkModel:
         self._cache: Dict[Tuple[int, str], np.ndarray] = {}
         # Cosmological / volume info keyed by snapshot
         self._meta:  Dict[int, Dict[str, float]]       = {}
+        # SFH time arrays keyed by snapshot: {"delta_t": ndarray, "lbt_mean": ndarray}
+        self._sfh_meta: Dict[int, Dict[str, np.ndarray]] = {}
 
     # ------------------------------------------------------------------
     # Core access
@@ -155,29 +168,39 @@ class SharkModel:
     def get(self, field: str, redshift: float) -> np.ndarray:
         """Return the array for *field* at the snapshot nearest *redshift*.
 
+        Covers both ``GALAXY_FIELDS`` (from galaxies.hdf5) and
+        ``SFH_FIELDS`` (from star_formation_histories.hdf5).
+
         The result is cached; subsequent calls for the same
         (field, redshift) are free.
 
         Parameters
         ----------
         field : str
-            Logical field name from ``GALAXY_FIELDS`` (e.g. ``"mstars_disk"``).
+            Logical field name from ``GALAXY_FIELDS`` or ``SFH_FIELDS``.
         redshift : float
             Target redshift; matched to nearest snapshot.
 
         Returns
         -------
-        arr : ndarray, shape (n_galaxies,)
+        arr : ndarray
+            Shape (n_galaxies,) for galaxy fields.
+            Shape (n_galaxies, n_sfh_bins) for SFH fields.
         """
-        if field not in GALAXY_FIELDS:
+        all_fields = {**GALAXY_FIELDS, **SFH_FIELDS}
+        if field not in all_fields:
             raise KeyError(
                 f"Unknown field '{field}'. "
-                f"Available: {sorted(GALAXY_FIELDS)}"
+                f"Available galaxy fields: {sorted(GALAXY_FIELDS)}. "
+                f"Available SFH fields: {sorted(SFH_FIELDS)}."
             )
         snapshot = int(self.redshift_table[redshift])
         key      = (snapshot, field)
         if key not in self._cache:
-            self._load_snapshot(snapshot)
+            if field in SFH_FIELDS:
+                self._load_sfh_snapshot(snapshot)
+            else:
+                self._load_snapshot(snapshot)
         arr = self._cache[key]
         if arr is None:
             raise AttributeError(
@@ -200,22 +223,33 @@ class SharkModel:
     def preload(self, fields: Sequence[str], redshifts: Sequence[float]) -> "SharkModel":
         """Eagerly load *fields* for all *redshifts* into the cache.
 
-        Useful before a long analysis loop to batch all HDF5 reads upfront.
+        Covers both galaxy fields and SFH fields.  The two file types are
+        loaded independently so requesting only galaxy fields does not
+        trigger an SFH read, and vice versa.
 
         Returns
         -------
         self : SharkModel   (for chaining)
         """
+        galaxy_fields = [f for f in fields if f in GALAXY_FIELDS]
+        sfh_fields    = [f for f in fields if f in SFH_FIELDS]
+        unknown       = [f for f in fields if f not in GALAXY_FIELDS and f not in SFH_FIELDS]
+        if unknown:
+            raise KeyError(f"Unknown fields in preload: {unknown}")
+
         for z in redshifts:
             snapshot = int(self.redshift_table[z])
-            if not self._snapshot_fully_cached(snapshot, fields):
+            if galaxy_fields and not self._snapshot_fully_cached(snapshot, galaxy_fields):
                 self._load_snapshot(snapshot)
+            if sfh_fields and not self._snapshot_fully_cached(snapshot, sfh_fields):
+                self._load_sfh_snapshot(snapshot)
         return self
 
     def clear_cache(self) -> None:
         """Release all cached arrays, freeing memory."""
         self._cache.clear()
         self._meta.clear()
+        self._sfh_meta.clear()
 
     # ------------------------------------------------------------------
     # Derived quantities
@@ -290,6 +324,96 @@ class SharkModel:
         """Comoving survey volume in Mpc^3 for the snapshot nearest *redshift*."""
         return self.get_meta(redshift)["vol"]
 
+    def age_at_z(self, z: float) -> float:
+        """
+        Age of the Universe [Gyr] at redshift *z*, using this model's
+        cosmology (H0, OmegaM, OmegaB read from the HDF5 cosmology group).
+
+        Builds an astropy FlatLambdaCDM lazily from cached meta values —
+        triggers an HDF5 read on first call for whichever snapshot is
+        nearest *z* if not already cached.
+        """
+        from astropy.cosmology import FlatLambdaCDM
+        meta = self.get_meta(z)
+        cosmo = FlatLambdaCDM(
+            H0=meta["h0"] * 100.0, Om0=meta["omega_m"], Ob0=meta["omega_b"]
+        )
+        return float(cosmo.age(z).value)
+
+    def lookback_at_z(self, z: float) -> float:
+        """Lookback time [Gyr] to redshift *z*, using this model's cosmology."""
+        from astropy.cosmology import FlatLambdaCDM
+        meta = self.get_meta(z)
+        cosmo = FlatLambdaCDM(
+            H0=meta["h0"] * 100.0, Om0=meta["omega_m"], Ob0=meta["omega_b"]
+        )
+        return float(cosmo.lookback_time(z).value)
+
+    # ------------------------------------------------------------------
+    # SFH-specific accessors
+    # ------------------------------------------------------------------
+
+    def get_sfh_meta(self, redshift: float) -> Dict[str, np.ndarray]:
+        """Return the SFH time arrays for the snapshot nearest *redshift*.
+
+        Keys
+        ----
+        ``delta_t``  : ndarray, shape (n_sfh_bins,)
+            Width of each SFH time bin in Myr.
+        ``lbt_mean`` : ndarray, shape (n_sfh_bins,)
+            Mean lookback time of each bin in Gyr.
+
+        These are snapshot-level scalars shared by all galaxies and are
+        read from star_formation_histories.hdf5 on first access.
+        """
+        snapshot = int(self.redshift_table[redshift])
+        if snapshot not in self._sfh_meta:
+            self._load_sfh_snapshot(snapshot)
+        return self._sfh_meta[snapshot]
+
+    def sfh_disk(self, redshift: float) -> np.ndarray:
+        """Disk SFH array  [M_sun / yr], shape (n_galaxies, n_sfh_bins)."""
+        return self.get("sfh_disk", redshift)
+
+    def sfh_bulge(self, redshift: float) -> np.ndarray:
+        """Bulge (burst) SFH array  [M_sun / yr], shape (n_galaxies, n_sfh_bins)."""
+        return self.get("sfh_bulge", redshift)
+
+    def sfh_metals_disk(self, redshift: float) -> np.ndarray:
+        """Disk stellar metallicity history  [M_sun], shape (n_galaxies, n_sfh_bins)."""
+        return self.get("sfh_metals_disk", redshift)
+
+    def sfh_metals_bulge(self, redshift: float) -> np.ndarray:
+        """Bulge stellar metallicity history  [M_sun], shape (n_galaxies, n_sfh_bins)."""
+        return self.get("sfh_metals_bulge", redshift)
+
+    def Z_disk_history(self, redshift: float) -> np.ndarray:
+        """
+        Mass-weighted metallicity of disk stars per SFH bin.
+
+        Derived as mz_disk / mstar_disk per bin, clipped to [1e-4, 0.03]
+        to stay within FSPS SSP grid bounds.  Where the stellar mass in a
+        bin is zero the metallicity falls back to solar (0.02).
+
+        Returns
+        -------
+        Z : ndarray, shape (n_galaxies, n_sfh_bins)
+        """
+        return _sfh_metallicity(self.sfh_metals_disk(redshift),
+                                self.sfh_disk(redshift))
+
+    def Z_bulge_history(self, redshift: float) -> np.ndarray:
+        """
+        Mass-weighted metallicity of bulge stars per SFH bin.
+        See ``Z_disk_history`` for details.
+
+        Returns
+        -------
+        Z : ndarray, shape (n_galaxies, n_sfh_bins)
+        """
+        return _sfh_metallicity(self.sfh_metals_bulge(redshift),
+                                self.sfh_bulge(redshift))
+
     # ------------------------------------------------------------------
     # Repr
     # ------------------------------------------------------------------
@@ -344,10 +468,13 @@ class SharkModel:
         if not available:
             # No readable fields — still need metadata
             with h5py.File(fname, "r") as f:
-                h0    = float(f["cosmology/h"][()])
-                vol_h = float(f["run_info/effective_volume"][()]) * len(self.subvols)
+                h0      = float(f["cosmology/h"][()])
+                omega_m = float(f["cosmology/omega_m"][()])
+                omega_b = float(f["cosmology/omega_b"][()])
+                vol_h   = float(f["run_info/effective_volume"][()]) * len(self.subvols)
             self._meta[snapshot] = {
-                "h0": h0, "vol_h": vol_h, "vol": vol_h / h0**3
+                "h0": h0, "vol_h": vol_h, "vol": vol_h / h0**3,
+                "omega_m": omega_m, "omega_b": omega_b,
             }
             return
 
@@ -362,10 +489,18 @@ class SharkModel:
         h0, vol_h = raw[0], raw[1]
         arrays    = raw[2:]
 
+        # OmegaM/OmegaB aren't returned by common.read_data; one cheap
+        # direct read of two scalars from the file already inspected above.
+        with h5py.File(fname, "r") as f:
+            omega_m = float(f["cosmology/omega_m"][()])
+            omega_b = float(f["cosmology/omega_b"][()])
+
         self._meta[snapshot] = {
-            "h0":    float(h0),
-            "vol_h": float(vol_h),
-            "vol":   float(vol_h) / float(h0)**3,
+            "h0":      float(h0),
+            "vol_h":   float(vol_h),
+            "vol":     float(vol_h) / float(h0)**3,
+            "omega_m": omega_m,
+            "omega_b": omega_b,
         }
 
         # Map returned arrays back to logical field names.
@@ -385,3 +520,92 @@ class SharkModel:
         self, snapshot: int, fields: Sequence[str]
     ) -> bool:
         return all((snapshot, f) in self._cache for f in fields)
+
+    def _load_sfh_snapshot(self, snapshot: int) -> None:
+        """Read all SFH_FIELDS for *snapshot* from star_formation_histories.hdf5.
+
+        Uses ``common.read_sfh``, which already handles subvolume
+        concatenation.  Its ``fields`` parameter is a plain ``{group: dataset}``
+        dict (one dataset per group per call) — since SFH_FIELDS has two
+        datasets per group (disk/burst under both star_formation_history and
+        metallicity_history), each logical field is fetched with its own
+        call rather than batched, to avoid dict-key collisions overwriting
+        one of the two entries sharing a group.
+
+        delta_t and lbt_mean are stored in ``_sfh_meta`` (read once, on the
+        first successful field call); per-galaxy arrays go into ``_cache``.
+
+        Fields absent from the HDF5 file are stored as None and will raise
+        a clear AttributeError on access.
+        """
+        first_subvol = sorted(self.subvols)[0]
+
+        fname = os.path.join(self.model_dir, str(snapshot), str(first_subvol), "star_formation_histories.hdf5")
+
+        with h5py.File(fname, "r") as f:
+            self._sfh_meta[snapshot] = {
+                "delta_t": f["delta_t"][()],
+                "lbt_mean": f["lbt_mean"][()],
+            }
+            available = set(f.keys())
+
+        meta_stored = True
+
+        for logical, (grp, ds) in SFH_FIELDS.items():
+            # No galaxies/components stored in this SFH file
+            if grp not in available:
+                print(
+                    f"  [{self.label}] snapshot {snapshot}: "
+                    f"missing SFH group '{grp}'. "
+                    f"Field '{logical}' will be unavailable."
+                )
+                self._cache[(snapshot, logical)] = None
+                continue
+            try:
+                arrays, _, _ = common.read_sfh(
+                    self.model_dir, snapshot, {grp: ds}, self.subvols
+                )
+                self._cache[(snapshot, logical)] = arrays[0]
+            except (KeyError, OSError) as exc:
+                print(
+                    f"  [{self.label}] snapshot {snapshot}: "
+                    f"could not read '{grp}/{ds}' from "
+                    f"star_formation_histories.hdf5: {exc}. "
+                    f"Field '{logical}' will be unavailable."
+                )
+                self._cache[(snapshot, logical)] = None
+                continue
+
+            # arrays is a length-1 list since we requested one field
+            self._cache[(snapshot, logical)] = arrays[0]
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+def _sfh_metallicity(
+    mz_history: np.ndarray,
+    sfr_history: np.ndarray,
+    z_floor: float = 1e-4,
+    z_ceil:  float = 0.03,
+) -> np.ndarray:
+    """Derive metallicity Z(t) from metal-mass and SFR histories.
+
+    Parameters
+    ----------
+    mz_history  : (n_gal, n_bins)  cumulative metal stellar mass per bin [M_sun]
+    sfr_history : (n_gal, n_bins)  SFR per bin [M_sun / yr]
+    z_floor, z_ceil : float
+        Clip range matching FSPS SSP grid bounds.
+
+    Returns
+    -------
+    Z : (n_gal, n_bins), clipped to [z_floor, z_ceil].
+    """
+    # Stellar mass formed per bin ∝ SFR (delta_t is common to all galaxies
+    # so the ratio mz/mstar is proportional to mz/sfr; we use sfr as a proxy
+    # for the mass weight within each bin).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        Z = np.where(sfr_history > 0, mz_history / sfr_history, 0.02)
+    return np.clip(Z, z_floor, z_ceil).astype(np.float64)

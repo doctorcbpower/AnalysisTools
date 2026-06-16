@@ -100,7 +100,35 @@ class SnapshotTools:
         self.unit_time_in_cgs = self.unit_length_in_cgs / self.unit_velocity_in_cgs
         self.unit_density_in_cgs = self.unit_mass_in_cgs / self.unit_length_in_cgs**3
         self.unit_sfr_in_cgs = SOLAR_MASS_IN_CGS / YEAR_IN_CGS
-    
+   
+    def get_derived_fields(self, mu=2.3):
+        """
+        Compute physical CGS fields from loaded snapshot data.
+        Requires read() to have been called first.
+        Returns dict with keys: rho, u, pressure, temperature
+        """
+        GAMMA_MINUS1 = 5./3. - 1.
+        PROTONMASS   = 1.6726e-24
+        BOLTZMANN    = 1.38065e-16
+
+        # Prefer gas particle sub-object if LoadParticlesByType has been called
+        if hasattr(self, 'gas') and hasattr(self.gas, 'density'):
+            rho = self.gas.density * self.unit_density_in_cgs
+            u   = self.gas.internal_energy * (self.unit_velocity_in_cgs**2)
+            pos = self.gas.pos
+        elif hasattr(self, 'rho') and self.rho is not None:
+            # Fall back to raw arrays — caller is responsible for gas-only slicing
+            rho = self.rho * self.unit_density_in_cgs
+            u   = self.u   * (self.unit_velocity_in_cgs**2)
+            pos = self.pos
+        else:
+            raise RuntimeError("No gas density/energy found. Call read_snapshot() and LoadParticlesByType('gas') first.")
+
+        p   = GAMMA_MINUS1 * u * rho
+        T   = GAMMA_MINUS1 * u * PROTONMASS * mu / BOLTZMANN
+
+        return {"rho": rho, "u": u, "pressure": p, "temperature": T}
+
     def load_snapshot(self, snapfilename: str) -> None:
         """Register and validate the snapshot file for later use."""
         import os
@@ -165,6 +193,24 @@ class SnapshotTools:
             f"files={self.num_files}, "
             f"base='{self.snapbase}'"
         )
+        
+    @property
+    def hsml(self):
+        return getattr(self, 'smoothinglength', None)
+
+    @hsml.setter
+    def hsml(self, value):
+        self.smoothinglength = value
+        
+    def _ensure_ptype(self):
+        """Reconstruct ptype from num_part_total if not set by reader."""
+        if not hasattr(self, 'ptype') or self.ptype is None:
+            if not hasattr(self, 'num_part_total'):
+                raise RuntimeError("Cannot reconstruct ptype: num_part_total missing.")
+            self.ptype = np.concatenate([
+                np.full(int(n), t, dtype=np.int32)
+                for t, n in enumerate(self.num_part_total)
+            ])
     
     def _transfer_attributes_to_reader(self, reader):
         """Transfer snapshot metadata to the reader."""
@@ -241,6 +287,7 @@ class SnapshotTools:
                         import copy as pycopy
                         data = pycopy.deepcopy(data)
                 setattr(writer, dset, data)
+                
     def _initialize_writer_header(self, writer, idx, idx_type):
         # --- particle counts ---
         num_part_this_file = np.zeros(6, dtype=np.int64)
@@ -319,17 +366,21 @@ class SnapshotTools:
         except Exception as e:
             logging.error(f"Error reading snapshot {self.snapfilename}: {e}")
             raise
-        
+
+        self._ensure_ptype()
+
         return self
         
-    def write_snapshot(self, filename: str,
-                             idx: np.int32,
-                             idx_type: np.int64,
-                             file_format: str = "hdf5",
-                             convention: str = "SWIFT",
-                             blocks_to_write: list[str]| None = None,
-                             **kwargs
-                       ) -> None:
+    def write_snapshot(
+        self,
+        filename: str,
+        idx: Optional[np.ndarray] = None,
+        idx_type: Optional[np.ndarray] = None,
+        file_format: str = "hdf5",
+        convention: str = "SWIFT",
+        blocks_to_write: Optional[List[str]] = None,
+        **kwargs
+    ) -> None:
         """
         Write snapshot data to file in the chosen format.
 
@@ -337,35 +388,60 @@ class SnapshotTools:
         ----------
         filename : str
             Path to the output file.
+        idx : np.ndarray, optional
+            Particle indices to write. Defaults to all particles.
+        idx_type : np.ndarray, optional
+            Particle types for each index. Defaults to self.ptype.
         file_format : str, optional
             File format to use. Currently supports "hdf5".
-        convention: str, optional
-            Code convention to use - determines the names of blocks
-        blocks_to_write : list[str], optional   
+        convention : str, optional
+            Code convention to use - determines the names of blocks.
+        blocks_to_write : list[str], optional
             List of dataset names to include in the output. Defaults to
             ['pos', 'vel', 'pids', 'mass', 'groupid'].
-        Optional kwargs can include metadata like:
-        halo_centre, halo_systemic_velocity, halo_extent, run_label, etc.
+        **kwargs
+            Optional metadata: halo_centre, halo_systemic_velocity,
+            halo_extent, run_label, etc.
         """
+        if not hasattr(self, 'pos') or self.pos is None:
+            raise RuntimeError("No data loaded — call read_snapshot() first.")
+
+        # --- derive idx and idx_type if not supplied ---
+        if idx is None:
+            idx = np.arange(len(self.pos), dtype=np.int32)
+
+        if idx_type is None:
+            if hasattr(self, 'ptype') and self.ptype is not None:
+                idx_type = self.ptype[idx].astype(np.int64)
+            else:
+                # Last resort: reconstruct from num_part_total
+                if not hasattr(self, 'num_part_total'):
+                    raise RuntimeError(
+                        "Cannot determine particle types: neither 'ptype' nor "
+                        "'num_part_total' is available."
+                    )
+                idx_type = np.concatenate([
+                    np.full(n, t, dtype=np.int64)
+                    for t, n in enumerate(self.num_part_total)
+                ])[idx]
+
         blocks = blocks_to_write or ['pos', 'vel', 'pids', 'mass', 'groupid']
 
-        self.logger.info(f"Writing snapshot '{filename}' using {self.snapfileformat}")
+        self.logger.info(
+            f"Writing {len(idx)} particles to '{filename}' "
+            f"(format={file_format}, convention={convention})"
+        )
 
         if file_format.lower() == "hdf5":
-            writer = write_hdf5(output_convention=convention, idx=idx, idx_type=idx_type, **kwargs)
-
+            writer = write_hdf5(
+                output_convention=convention,
+                idx=idx,
+                idx_type=idx_type,
+                **kwargs
+            )
             self._transfer_attributes_to_writer(writer)
-
             self._initialize_writer_header(writer, idx=idx, idx_type=idx_type)
-            """
-            Options are: pos, vel, pids, mass, u, rho, hsml, gas_Z, stellar_Z,
-                         sfr, age, initmass, groupid
-            """
-
-            self._transfer_datasets_to_writer(writer,
-                                              blocks,
-                                              )
-
+            self._transfer_datasets_to_writer(writer, blocks)
             writer.write_hdf5_snapshot(filename)
         else:
             raise ValueError(f"Unsupported snapshot format: {file_format}")
@@ -609,4 +685,3 @@ def place_points_in_mesh(pos, pos_offset, size, mesh_dimension, **kwargs):
     """
     return np.fix(mesh_dimension * (pos - pos_offset) / size)
 
- 

@@ -473,6 +473,7 @@ class Plotter:
 
     def _save(self, plt, fig, fname: str) -> str:
         common.savefig(self.outdir, fig, fname)
+        plt.show()          # display inline in notebook
         plt.close(fig)
         path = os.path.join(self.outdir, fname)
         print(f"  [plotter] saved {path}")

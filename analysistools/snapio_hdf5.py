@@ -91,7 +91,7 @@ class read_hdf5:
             if self.num_part_total[indx] > 0:
                 if 'Masses' in list(f['PartType%d' % indx].keys()):
                     name_of_mass_block = 'Masses'
-        
+        self.name_of_mass_block = name_of_mass_block
         return name_of_mass_block
 
     def _read_cosmological_params(self, f):
@@ -328,26 +328,46 @@ class read_hdf5:
     def _read_gas_data(self, f, itype, istart, ifinish, jstart, extra_flags):
         """Read gas particle specific data."""
         ptype_group = f[f'PartType{itype}']
-        field_name = 'InternalEnergy' if 'InternalEnergy' in ptype_group else 'InternalEnergies'
-        self.u[istart:ifinish] = ptype_group[field_name][()]
-
-        if not self.isics:
-            field_name = 'Density' if 'Density' in ptype_group else 'Densities'
-            self.rho[istart:ifinish] = ptype_group[field_name][()]
-
-        if self.convention.lower() != 'arepo':
-            self.smoothinglength[istart:ifinish] = f['PartType%d/SmoothingLengths' % itype][()]
         
+        # Internal energy
+        if 'InternalEnergy' in ptype_group:
+            self.name_of_u_block = 'InternalEnergy'
+            self.u[istart:ifinish] = ptype_group['InternalEnergy'][()]
+        elif 'InternalEnergies' in ptype_group:
+            self.name_of_u_block = 'InternalEnergies'
+            self.u[istart:ifinish] = ptype_group['InternalEnergies'][()]
+        else:
+            self.name_of_u_block = 'InternalEnergy'        
+            self.u[istart:ifinish] = 0.0
+
+        # Density
+        if not self.isics:
+            if 'Density' in ptype_group:
+                self.rho[istart:ifinish] = ptype_group['Density'][()]
+            elif 'Densities' in ptype_group:
+                self.rho[istart:ifinish] = ptype_group['Densities'][()]
+            else:
+                self.rho[istart:ifinish] = 0.0
+
+        # Smoothing length
+        if self.convention.lower() != 'arepo':
+            if 'SmoothingLengths' in ptype_group:
+                self.smoothinglength[istart:ifinish] = ptype_group['SmoothingLengths'][()]
+            elif 'SmoothingLength' in ptype_group:
+                self.smoothinglength[istart:ifinish] = ptype_group['SmoothingLength'][()]
+            else:
+                self.smoothinglength[istart:ifinish] = 0.0
+
         # Extra gas data
         if extra_flags.get('ismetallicity', False):
             if f['PartType%d/Metallicity' % itype].ndim > 1:
                 self.gas_metallicity[istart:ifinish] = f['PartType%d/Metallicity' % itype][:, 0]
             else:
                 self.gas_metallicity[istart:ifinish] = f['PartType%d/Metallicity' % itype][()]
-        
+
         if extra_flags.get('issfr', False):
             self.gas_sfr[istart:ifinish] = f['PartType%d/StarFormationRate' % itype][()]
-        
+
         return jstart
 
     def _read_star_data(self, f, itype, istart, ifinish, jstart, extra_flags, num_particles=None):
@@ -600,41 +620,42 @@ class write_hdf5:
             "aexp-scale-exponent": 0,
             "h-scale-exponent": -1,
         })
+        
+    def _gas_local_idx(self, mask):
+        """
+        For a gas-only array (u, rho, hsml), convert the full-particle
+        idx[mask] into indices into the gas-only sub-array.
+        """
+        gas_type = getattr(self, 'gas_type', 0)
+        gas_mask = self.ptype == gas_type
+        gas_positions = np.where(gas_mask)[0]
+        full_to_gas = np.empty(len(self.ptype), dtype=np.int64)
+        full_to_gas[gas_positions] = np.arange(len(gas_positions))
+        return full_to_gas[self.idx[mask]]
 
     def _write_internal_energies(self, group, i, mask, name_of_u_block):
-        idx_i = self.idx[mask]
-        data_u = group.create_dataset(
-            name_of_u_block,
-            data=self.u[idx_i],
-        )
+        data_u = group.create_dataset(name_of_u_block, data=self.u[self._gas_local_idx(mask)])
         data_u.attrs.update({
             "CGSConversionFactor": self.unit_velocity_in_cgs**2,
             "aexp-scale-exponent": 0,
             "h-scale-exponent": 0,
         })
 
+    def _write_densities(self, group, i, mask):
+        data_rho = group.create_dataset('Density', data=self.rho[self._gas_local_idx(mask)])
+        data_rho.attrs.update({
+            "CGSConversionFactor": self.unit_length_in_cgs,
+            "aexp-scale-exponent": 3,
+            "h-scale-exponent": 2,
+        })
+
     def _write_smoothing_lengths(self, group, i, mask):
-        idx_i = self.idx[mask]
-        data_smoothinglength = group.create_dataset(
-            'SmoothingLength',
-            data=self.hsml[idx_i],
-        )
-        data_smoothinglength.attrs.update({
+        arr = self.hsml if hasattr(self, 'hsml') else self.smoothinglength
+        data_sl = group.create_dataset('SmoothingLength', data=arr[self._gas_local_idx(mask)])
+        data_sl.attrs.update({
             "CGSConversionFactor": self.unit_length_in_cgs,
             "aexp-scale-exponent": 1,
             "h-scale-exponent": -1,
-        })
-
-    def _write_densities(self, group, i, mask):
-        idx_i = self.idx[mask]
-        data_rho = group.create_dataset(
-            'Density',
-            data=self.rho[idx_i],
-        )
-        data_rho.attrs.update({
-            "CGSConversionFactor": self.unit_density_in_cgs,
-            "aexp-scale-exponent": 3,
-            "h-scale-exponent": 2,
         })
 
     def _write_metallicities(self, group, i, mask, metallicity_type='gas'):
