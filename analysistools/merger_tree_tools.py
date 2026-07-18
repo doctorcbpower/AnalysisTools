@@ -1,584 +1,562 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Jan 16 13:55:13 2023
+merger_tree_tools.py
+Refactored: 2026-07-03
 
-@author: cpower
+Unified interface for reading and analysing halo merger trees produced by
+SubFind-HBT MergerTree, TreeFrog (VELOCIraptor), and AHF MergerTree, designed
+to work seamlessly alongside halo_tools.HaloTools.
 
-Script to ingest and analyse halo merger trees generated with SubFind-HBT MergerTree
-and TreeFrog
+Design summary
+--------------
+Every supported tree format is parsed once, by a dedicated reader in its
+own module (treeio_subfind.py, treeio_treefrog.py, treeio_ahf.py), into a
+small data container plus a fast (SnapNum, ID) -> index lookup table. From
+there, a matching format-specific `walk_*()` function walks the main
+branch and returns a `HaloTrack`: a small container of time-ordered numpy
+arrays (mass, position, velocity, subhalo status, host id, ...). This
+class just dispatches to those readers/walkers -- all downstream analysis
+and plotting works off `HaloTrack` objects and is completely
+format-agnostic.
 
+Module layout
+-------------
+merger_tree_types.py   HaloTrack, OrbitAnalysis, MergerTreeError, periodic_delta
+treeio_subfind.py       SubFind-HBT reader (read_subfind_hbt) + walker (walk_subfind)
+treeio_treefrog.py      TreeFrog/VELOCIraptor reader (read_treefrog) + walker (walk_treefrog)
+treeio_ahf.py           AHF MergerTree reader (read_ahf_mergertree) + walker (walk_ahf)
+merger_tree_tools.py    MergerTreeTools (this file): dispatch + analysis + plotting
+
+Typical usage
+-------------
+>>> ht = HaloTools(comoving_units=True)
+>>> ht.read_catalogue("groups_010.hdf5", fileformat="SubFind", standardise=True)
+>>>
+>>> mt = MergerTreeTools("trees.hdf5", treefileformat="SubFind")
+>>> track = mt.from_halo(ht, index=42, object_type="Subhalo")
+>>> mt.plot_track(track)
+>>>
+>>> host_track = mt.get_track(host_id, snapnum)
+>>> mt.plot_relative(track, host_track)
+>>>
+>>> event = track.infall_snapshot()
+>>> print(event["snapshot"], event["mass"])
+
+Author: C. Power
 """
-import h5py
-import numpy as np
+from __future__ import annotations
+
 import os
+import logging
+from typing import Optional, Dict, Any, List, Tuple, Union
 
-from . import halo_tools as ht
+import numpy as np
+import matplotlib.pyplot as plt
 
-class TreeTools:
-    def __init__(self,treefilename,treefileformat,comoving_units=False,**kwargs):
-        self.treefilename=treefilename
-        self.treefileformat=treefileformat
-        self.comoving_units=comoving_units
+from .merger_tree_types import MergerTreeError, HaloTrack, OrbitAnalysis, periodic_delta
+from .treeio_subfind import (
+    read_subfind_hbt, walk_subfind, resolve_group_first_sub,
+    get_group_members as _subfind_get_group_members,
+)
+from .treeio_treefrog import read_treefrog, walk_treefrog
+from .treeio_ahf import read_ahf_mergertree, walk_ahf
 
-    def ReadMergerTreeCatalogue(self):
-        if self.treefileformat=='SubFind':
-            # The SubFind-dervied tree contains a
-            #   * TreeTable - with Tree IDs, Lengths, Offsets
-            #   * TreeTimes - with expansion factors and redshifts
-            #   * TreeHalos - with information about the subhalos, that are
-            #                 the structures that are linked, and the links
-            #                 between progenitors and descendents, as well
-            #                 as subhalos in the same FOF structure
+# ---------------------------------------------------------------------
+# ASSUMPTIONS / CONFIGURATION
+# ---------------------------------------------------------------------
+# These are the only places you should need to touch if your
+# halo_tools_standardise_names.py schema, or your AHF MergerTree ID/SnapNum
+# encoding, differs from what's assumed below. I don't have visibility into
+# either of those files, so these are best-effort defaults.
 
-            with h5py.File(self.treefilename,'r') as f:
+# Field name expected in ht.halos / ht.subhalos *after* standardise_names()
+# has been applied, used by MergerTreeTools.from_halo(). This matches
+# STANDARD_KEYS in halo_tools_standardise_names.py (lowercase).
+STD_ID_FIELD = "halo_id"
 
-                header_info=dict(f['Header'].attrs.items())
-                
-                if 'Ntrees_Total' not in header_info:
-                    print('Warning: no trees in file...')
-                    return -1
-                else:
-                    print('Found %d merger trees in file...'%header_info['Ntrees_Total'])
-                # Read information from the header
-                self.LastSnapShotNr=header_info['LastSnapShotNr']   # Final snapshot of simulation to create tree
-                self.Nhalos_ThisFile=header_info['Nhalos_ThisFile'] # Number of halos in file
-                self.Nhalos_Total=header_info['Nhalos_Total']       # Number of halos in total
-                self.Ntrees_ThisFile=header_info['Ntrees_ThisFile'] # Number of trees in file
-                self.Ntrees_Total=header_info['Ntrees_Total']       # Number of trees in total
-                self.NumFiles=header_info['NumFiles']               # Number of files
+# Sentinel meaning "this table has no stored ID field; the ID is the row
+# index" -- matches ROW_INDEX_SENTINEL in halo_tools_standardise_names.py.
+# SubFind subhalos are numbered this way (no SubhaloNr dataset; subhalo N is
+# row N of the Subhalo/* arrays), which is also how the SubFind-HBT tree
+# file's TreeHalos/SubhaloNr values were assigned in the first place -- so
+# this only holds for a catalogue read from a single, unsplit file.
+ROW_INDEX_SENTINEL = "__ROW_INDEX__"
 
-                # Read Redshift and Time
-                self.Redshift=f['TreeTimes/Redshift'][()]
-                self.Time=f['TreeTimes/Time'][()]
+# Native (pre-standardisation) ID field name per (treefileformat, object_type),
+# used as a fallback / for AHF property look-ups, since it's what the raw
+# reader output in haloio_*.py actually contains today. Adjust if your local
+# copies of the haloio_*.py readers differ.
+RAW_ID_FIELD = {
+    ("SubFind", "Group"): "GroupNr",
+    ("SubFind", "Subhalo"): ROW_INDEX_SENTINEL,
+    ("MergerTree", "Group"): "HaloID",     # haloio_ahf.py
+    ("MergerTree", "Subhalo"): "HaloID",
+}
 
-                # Read Cosmological Parameters
-                self.Omega0=f['Parameters'].attrs['Omega0']
-                self.OmegaLambda=f['Parameters'].attrs['OmegaLambda']
-                self.OmegaBaryon=f['Parameters'].attrs['OmegaBaryon']
-                self.HubbleParam=f['Parameters'].attrs['HubbleParam']
-                self.BoxSize=f['Parameters'].attrs['BoxSize']
-            
-                # Read Halo Properties
-                self.GrpNr=f['TreeHalos/GroupNr'][()]               # Group number in halo catalogue at SnapNum
-                self.SubhaloNr=f['TreeHalos/SubhaloNr'][()]         # Corresponding subhalo number in halo catalogue at SnapNum
-                self.SnapNum=f['TreeHalos/SnapNum'][()]             # Snapshot and halo catalogue number
-                self.GrpM200=f['TreeHalos/Group_M_Crit200'][()]
-                self.SubhaloMass=f['TreeHalos/SubhaloMass'][()]
-                self.SubhaloPos=f['TreeHalos/SubhaloPos'][()]
-                self.SubhaloVel=f['TreeHalos/SubhaloVel'][()]            
-                self.SubhaloVelDisp=f['TreeHalos/SubhaloVelDisp'][()]
-                self.SubhaloVmax=f['TreeHalos/SubhaloVmax'][()]
-                self.SubhaloVmaxRad=f['TreeHalos/SubhaloVmaxRad'][()]
-            
-                # Read Tree Links
-                # Descendants
-                self.TreeFirstDescendant=f['TreeHalos/TreeFirstDescendant'][()]
-                self.TreeDescendant=f['TreeHalos/TreeDescendant'][()]
-                self.TreeNextDescendant=f['TreeHalos/TreeNextDescendant'][()]   # ID of subhalo that shares common progenitor 
-                # Progenitors
-                self.TreeFirstProgenitor=f['TreeHalos/TreeFirstProgenitor'][()]
-                self.TreeProgenitor=f['TreeHalos/TreeProgenitor'][()]
-                self.TreeNextProgenitor=f['TreeHalos/TreeNextProgenitor'][()]   # ID of subhalo that shares common descendant
-                self.TreeMainProgenitor=f['TreeHalos/TreeMainProgenitor'][()]
-                # FOF group components
-                self.TreeFirstHaloInFOFgroup=f['TreeHalos/TreeFirstHaloInFOFgroup'][()]
-                self.TreeNextHaloInFOFgroup=f['TreeHalos/TreeNextHaloInFOFgroup'][()]
-                # IDs
-                self.TreeHalosID=f['TreeHalos/TreeID'][()]
-                self.TreeHalosIndex=f['TreeHalos/TreeIndex'][()]
-                # Table Information
-                # IDs
-                self.TreeID=f['TreeTable/TreeID'][()]        # Unique ID of tree
-                self.TreeLength=f['TreeTable/Length'][()]    # Length of tree
-                self.TreeOffset=f['TreeTable/StartOffset'][()]  # Offset within catalogue of tree
-        elif self.treefileformat=='TreeFrog':
-            with h5py.File(self.treefilename,'r') as f:
-                header_info=dict(f['Header'].attrs.items())
-
-                if 'NSnaps' not in header_info:
-                    print('Warning: no trees in file...')
-                    return -1
-                else:
-                    print('Found data for %03d snapshots in file...'%header_info['NSnaps'])
-
-                ID_Offset=f['Header/TreeBuilder'].attrs['Temporal_halo_id_value']
-                self.HubbleParam=f['Header/Simulation'].attrs['h_val']
-
-                self.TreeProgenitor={}
-                self.TreeProgenitorSnap={}
-                self.TreeRootHead={}
-                self.TreeRootTail={}
-                self.TreeRootHeadSnap={}
-                self.TreeRootTailSnap={}
-                self.TreeHalosID={}
-
-                self.Time={}
-                self.SnapNum={}
-                self.GrpM200={}
-                self.GrpMassFOF={}
-                self.GrpMassTot={}
-                self.hostHaloID={}
-                self.SubhaloMass={}
-                self.SubhaloPos={}
-                self.SubhaloVel={}
-                self.SubhaloVelDisp={}
-                self.SubhaloVmax={}
-                self.SubhaloVmaxRad={}
-                                
-                for group in f.keys():                            
-                    if 'Snap' in group and f[group].attrs['NHalos']>0:
-                        ScaleFactor=f[group].attrs['scalefactor']
-                        self.Time[group]=ScaleFactor
-                        Current_ID_Offset=f[group].attrs['Snapnum']*ID_Offset+1
-                        self.TreeProgenitor[group]=f[group]['Progenitor'][()]                        
-                        self.TreeProgenitorSnap[group]=f[group]['ProgenitorSnap'][()]
-                        self.TreeRootHead[group]=f[group]['RootHead'][()]
-                        self.TreeRootTail[group]=f[group]['RootTail'][()]
-                        self.TreeRootHeadSnap[group]=f[group]['RootHeadSnap'][()]
-                        self.TreeRootTailSnap[group]=f[group]['RootTailSnap'][()]
-                        self.TreeHalosID[group]=f[group]['ID'][()]
-                        
-                        self.SnapNum[group]=f[group].attrs['Snapnum']*np.ones(f[group].attrs['NHalos'],dtype=np.int32)
-                        self.GrpM200[group]=f[group]['Mass_200crit'][()]
-                        self.GrpMassTot[group]=f[group]['Mass_tot'][()]
-                        self.GrpMassFOF[group]=f[group]['Mass_FOF'][()]
-                        self.hostHaloID[group]=f[group]['hostHaloID'][()]
-
-                        self.SubhaloMass[group]=f[group]['Mass_tot'][()]
-                        self.SubhaloPos[group]=np.array([f[group]['Xcminpot'][()],f[group]['Ycminpot'][()],f[group]['Zcminpot'][()]]).T                                     
-                        self.SubhaloVel[group]=np.array([f[group]['VXc'][()],f[group]['VYc'][()],f[group]['VZc'][()]]).T             
-                        self.SubhaloVelDisp[group]=f[group]['sigV'][()]
-                        self.SubhaloVmax[group]=f[group]['Vmax'][()]
-                        self.SubhaloVmaxRad[group]=f[group]['Rmax'][()]
-
-                        if self.comoving_units==True:
-                            self.SubhaloPos[group]*=HubbleParam
-                            self.SubhaloPos[group]/=ScaleFactor
-                            self.SubhaloMass[group]*=HubbleParam
-        elif self.treefileformat=='MergerTree':
-            # The MergerTree AHF-dervied tree contains links between the halo IDs; the halo ID is defined in the halo
-            # catalogue
-            file = open(self.treefilename)
-            next(file)  # Skip line
-            next(file)  # Skip line
-            next(file)  # Skip line
-            nlines = 0
-            ndata = 0
-            for line in file:
-                if len(line.split())>1:
-                    ndata +=1
-                nlines += 1
-            file.close()
-            print(f'Number of halo links: {ndata}')
-            print(f'Number of halo IDs: {nlines}')
-
-            self.mtreedata=np.zeros([nlines,2],dtype=np.int64)
-            ndata = 0
-            file=open(self.treefilename)
-            next(file)  # Skip line
-            next(file)  # Skip line
-            next(file)  # Skip line
-            for line in file:
-                if 'END' in line:
-                    break
-                mtdata=line.split()
-                self.mtreedata[ndata]=mtdata
-                ndata += 1
-            file.close()
-            
-            self.desc_index=np.where(self.mtreedata[:,0]!=self.mtreedata[:,1])[0]
-            self.desc_ids=self.mtreedata[self.desc_index][:,0]
-            self.prog_len=self.mtreedata[self.desc_index][:,1]
-            self.prog_ids=self.mtreedata[np.where(self.mtreedata[:,0]==self.mtreedata[:,1])[0]][:,0]
+# AHF MergerTree encodes a single integer ID per halo per snapshot. AHF's own
+# convention (used both in the .AHF_mtree link files and, commonly, baked
+# into the "HaloID" column of .AHF_halos itself) is
+# ID = SnapNum * 10**12 + local_halo_index. Set this to match your files;
+# set to None if your AHF IDs already come as plain (snapnum, id) pairs.
+AHF_SNAPNUM_ID_MULTIPLIER: Optional[int] = 10**12
 
 
-    def TrackMainHaloProgenitor(self,MainSubhaloID,SnapshotNr):
-        if self.treefileformat=='SubFind':
-            """ Assumes the SubFind MergerTree structure - this tracks the first progenitor of a given subhalo identified in a halo catalogue at a given snapshot number.
-    
-                Receives MainSubhaloID, which can be obtained from GroupFirstSub in the subhalo catalogue for a given group number; and SnapshotNr - the snapshot number of the halo catalogue in which the halo is identified.
-            
-                Returns Redshift, Subhalo Mass, Parent Group Mass (200 times critical), Parent ID at SnapNum, Subhalo ID at SnapNum
-            """
-            # Find members of SubhaloNr whose SnapNum is SnapshotNr, and the one that corresponds
-            # to MainSubhaloID. Use this to identify the TreeID.
-            itree=self.TreeHalosID[np.where(self.SnapNum==SnapshotNr)[0]][np.where(self.SubhaloNr[np.where(self.SnapNum==SnapshotNr)[0]]==MainSubhaloID)[0]][0]
-            # Find members of SubhaloNr whose SnapNum is SnapshotNr, and the one that corresponds
-            # to MainSubhaloID. Use this to identify the TreeIndex within the TreeID.
-            index=self.TreeHalosIndex[np.where(self.SnapNum==SnapshotNr)[0]][np.where(self.SubhaloNr[np.where(self.SnapNum==SnapshotNr)[0]]==MainSubhaloID)[0]][0]
-            # Given the TreeID, we can identify within the catalogue the offsets of the beginning and
-            # end of the tree associated with TreeID
-            istart=self.TreeOffset[itree]
-            ifinish=self.TreeOffset[itree]+self.TreeLength[itree]
-        
-            # Now extract useful properties of the group and subhalo structures within tree TreeID
-            grp_num=self.GrpNr[istart:ifinish]       # Group Number in catalogue at Snapshort Number
-            grp_mass=self.GrpM200[istart:ifinish]    # Group M200 in catalogue at Snapshot Number
-            sub_num=self.SubhaloNr[istart:ifinish]   # Subhalo Number in catalogue at Snapshot Number
-            sub_mass=self.SubhaloMass[istart:ifinish]  # Subhalo Mass in catalogue at Snapshot Number
-            sub_pos=self.SubhaloPos[istart:ifinish]  # Subhalo Position in catalogue at Snapshot Number
-            sub_vel=self.SubhaloVel[istart:ifinish]  # Subhalo Velocity in catalogue at Snapshot Number
-            snap_num=self.SnapNum[istart:ifinish]   # Snapshot number
-            first_prog=self.TreeMainProgenitor[istart:ifinish]  # First progenitor
-            # Create arrays to contain the variables to be returned
-            redshift=[]
-            mass=[]
-            m200=[]
-            subhalo_pos=[]
-            subhalo_vel=[]
-            snapshot_number=[]
-            subhalo_number=[]
-            group_number=[]
+# ---------------------------------------------------------------------
+# Main user-facing class
+# ---------------------------------------------------------------------
 
-            # Initial index is already determined at SnapNum SnapShotNr
-            idx=index
-            tree_length=0
-        
-            while first_prog[idx]!=-1:     # Loop over list until we hit the root
-                redshift.append(self.Redshift[snap_num[idx]]) # Redshift
-                mass.append(sub_mass[idx])               # Mass of main subhalo
-                m200.append(grp_mass[idx])               # Mass of parent group, M200
-                subhalo_pos.append(sub_pos[idx])         # Position of subhalo
-                subhalo_vel.append(sub_vel[idx])         # Velocity of subhalo
-                snapshot_number.append(snap_num[idx])    # SnapNum
-                group_number.append(grp_num[idx])        # Unique ID of group at SnapNum
-                subhalo_number.append(sub_num[idx])      # Unique ID of subhalo at SnapNum
-                tree_length+=1
-                idx=first_prog[idx]
-
-            zform=0.0
-            alpha=0.0
-            deltam_over_m=0.0
-        
-            if tree_length>10:
-                zform=np.interp(0.5,np.flip(m200/m200[0]),np.flip(redshift))
-                logm_z3=np.interp(3,redshift,np.log(m200/m200[0]))
-                logm_z0pt3=np.interp(0.3,redshift,np.log(m200/m200[0]))
-                alpha=-logm_z3/3
-                deltam_over_m=1.0-np.exp(logm_z0pt3)
-        elif self.treefileformat=='TreeFrog':
-            """ Assumes the TreeFrog MergerTree structure - this tracks the first progenitor of a given subhalo identified in a halo catalogue at a given snapshot number.
-    
-                Receives MainSubhaloID, which can be obtained from GroupFirstSub in the subhalo catalogue for a given group number; and SnapshotNr - the snapshot number of the halo catalogue in which the halo is identified.
-            
-                Returns Redshift, Subhalo Mass, Parent Group Mass (200 times critical), Parent ID at SnapNum, Subhalo ID at SnapNum
-            """
-            indx=np.where(self.TreeHalosID['Snap_%03d'%SnapshotNr]==MainSubhaloID)[0]
-
-            if self.hostHaloID['Snap_%03d'%SnapshotNr][indx]!=-1:
-                print(MainSubhaloID,self.TreeHalosID['Snap_%03d'%SnapshotNr][indx],self.hostHaloID['Snap_%03d'%SnapshotNr][indx])
-                return
-            # Create arrays to contain the variables to be returned
-            redshift=np.array([])
-            mass=np.array([])
-            m200=np.array([])
-            subhalo_number=np.array([],dtype=np.uint64)
-            group_number=np.array([],dtype=np.uint64)
-            subhalo_pos=[]
-            subhalo_vel=[]
-            snapshot_number=[]
-            
-
-            # Initial index is already determined at SnapNum SnapShotNr
-            tree_length=0
-
-            SnapNum=SnapshotNr
-            SnapNumRoot=self.TreeRootTailSnap['Snap_%03d'%SnapNum][indx][0]
-
-            while SnapNum>SnapNumRoot:
-                redshift=np.append(redshift,1.0/self.Time['Snap_%03d'%SnapNum]-1.) # Redshift
-                mass=np.append(mass,self.GrpMassTot['Snap_%03d'%SnapNum][indx])  # Mass of main subhalo
-                m200=np.append(m200,self.GrpM200['Snap_%03d'%SnapNum][indx])  # Mass of parent group, M200
-                subhalo_pos=np.append(subhalo_pos,self.SubhaloPos['Snap_%03d'%SnapNum][indx])  # Centre of mass of system
-                subhalo_vel=np.append(subhalo_vel,self.SubhaloVel['Snap_%03d'%SnapNum][indx])  # Centre of mass velocity of system
-                group_number=np.append(group_number,self.TreeHalosID['Snap_%03d'%SnapNum][indx])         # Unique ID of group at SnapNum
-                subhalo_number=np.append(subhalo_number,self.TreeHalosID['Snap_%03d'%SnapNum][indx])     # Unique ID of subhalo at SnapNum
-                snapshot_number=np.append(snapshot_number,SnapNum)
-                tree_length+=1
-
-                if self.TreeProgenitor['Snap_%03d'%SnapNum][indx].size==0:
-                    break
-
-                ProgHaloID=self.TreeProgenitor['Snap_%03d'%SnapNum][indx]
-                SnapNum=self.TreeProgenitorSnap['Snap_%03d'%SnapNum][indx][0]
-                indx=np.where(self.TreeHalosID['Snap_%03d'%SnapNum]==ProgHaloID)[0]
-
-            zform=0.0
-            alpha=0.0
-            deltam_over_m=0.0
-        
-            if tree_length>10:
-                zform=np.interp(0.5,np.flip(m200/m200[0]),np.flip(redshift))
-                logm_z3=np.interp(3,redshift,np.log(m200/m200[0]))
-                logm_z0pt3=np.interp(0.3,redshift,np.log(m200/m200[0]))
-                alpha=-logm_z3/3
-                deltam_over_m=1.0-np.exp(logm_z0pt3)
-                                
-        elif self.treefileformat=='MergerTree':
-            """ Assumes the AHF MergerTree structure - this is a pain because the information is split across file.
-            """
-            index=np.where(self.desc_ids==MainSubhaloID)[0]
-            if index.size==0:
-                return -1
-            istart=self.desc_index[index][0]-index[0]
-            ifinish=istart+self.prog_len[index][0]
-            prog_id=self.prog_ids[istart:ifinish][0]
-
-            while prog_id.size>0:       # Loop over list until we hit the root
-                index=np.where(self.desc_ids==prog_id)[0]
-                if self.prog_len[index]==0:
-                    break
-                istart=self.desc_index[index][0]-index[0]
-                ifinish=istart+self.prog_len[index][0]
-                prog_id=self.prog_ids[istart:ifinish][0]
-
-        return np.array(redshift),np.array(mass),np.array(m200),\
-               np.array(subhalo_pos),np.array(subhalo_vel),\
-               np.array(snapshot_number),np.array(group_number),\
-               np.array(subhalo_number),zform,alpha,deltam_over_m
-            
-    
-    def TrackHaloDescendant(self,HaloID):
-        redshift=np.array([])
-        mass=np.array([])        
-        index=HaloID
-        while self.TreeFirstProgenitor[index] != -1:
-            redshift=np.append(redshift,self.Redshift[self.SnapNum[index]])
-            mass=np.append(mass,self.SubhaloMass[self.TreeFirstProgenitor[index]])
-            print(index,self.GroupNr[index],self.TreeFirstDescendant[index],self.TreeNextProgenitor[index])
-            index=self.TreeFirstProgenitor[index]
-        return redshift,mass
-    
-    def TrackMainHaloProgenitorsOfFOF(self,TrackHaloID,SnapNum):
-        index=np.where(self.SubhaloNr[np.where(self.SnapNum==SnapNum)[0]]==TrackHaloID)[0]
-        print(index,TrackHaloID,self.SubhaloNr[index],self.GroupNr[index],self.SubhaloPos[index])
-        # index=HaloID
-        
-        FOFindex=self.TreeFirstHaloInFOFgroup[index]   # This selects the main subhalo of the FOF group
-        print(FOFindex)
-        MainBranchIndex=FOFindex
-
-        self.pos_main_branch=np.array([])
-        self.vel_main_branch=np.array([])
-        self.mass_main_branch=np.array([])        
-        self.time_main_branch=np.array([])
-
-        num_nodes=0
-        while self.TreeMainProgenitor[MainBranchIndex]!=-1:
-            self.pos_main_branch=np.append(self.pos_main_branch,self.SubhaloPos[MainBranchIndex]*self.Time[self.SnapNum[MainBranchIndex]])
-            self.vel_main_branch=np.append(self.vel_main_branch,self.SubhaloVel[MainBranchIndex]*np.sqrt(self.Time[self.SnapNum[MainBranchIndex]]))
-            self.mass_main_branch=np.append(self.mass_main_branch,self.GroupMass[MainBranchIndex])            
-            self.time_main_branch=np.append(self.time_main_branch,self.Time[self.SnapNum[MainBranchIndex]])
-            num_nodes+=1
-            MainBranchIndex=self.TreeMainProgenitor[MainBranchIndex]
-        print("Number of nodes of main branch: %d"%num_nodes)
-        self.pos_main_branch=self.pos_main_branch.reshape(num_nodes,3)
-        self.vel_main_branch=self.vel_main_branch.reshape(num_nodes,3)
-        print("Earliest expansion factor: %f"%self.time_main_branch[num_nodes-1])
-
-        # return time_main_branch,mass_main_branch,pos_main_branch,vel_main_branch
-
-        num_in_FOF=0
-
-        FOFindex=self.TreeNextHaloInFOFgroup[FOFindex] # This selects the first (i.e. not main) subhalo in the FOF group now
-        
-        subhalo_pos=[]
-        subhalo_vel=[]
-        subhalo_mass=[]
-        subhalo_time=[]
-        
-        while self.TreeNextHaloInFOFgroup[FOFindex]!=-1:
-            Treeindex=FOFindex
-
-            dpos=np.array([])
-            dvel=np.array([])
-            mass=np.array([])
-            time=np.array([])
-
-            k=0
-            
-            while self.TreeMainProgenitor[Treeindex]!=-1:
-                if np.any(self.Time[self.SnapNum[Treeindex]]==self.time_main_branch)==True:
-                    j=np.where(self.time_main_branch==self.Time[self.SnapNum[Treeindex]])[0]
-                    pos_main_subhalo=self.pos_main_branch[j]
-                    pos_subhalo=self.SubhaloPos[Treeindex]*self.Time[self.SnapNum[Treeindex]]
-                    d=pos_subhalo-pos_main_subhalo
-                    d=np.where(d>0.5*self.BoxSize*self.Time[self.SnapNum[Treeindex]],d-self.BoxSize*self.Time[self.SnapNum[Treeindex]],d)
-                    d=np.where(d<-0.5*self.BoxSize*self.Time[self.SnapNum[Treeindex]],d+self.BoxSize*self.Time[self.SnapNum[Treeindex]],d)
-                    dpos=np.append(dpos,d)
-                                                                    
-                    vel_main_subhalo=self.vel_main_branch[j]
-                    vel_subhalo=self.SubhaloVel[Treeindex]*np.sqrt(self.Time[self.SnapNum[Treeindex]])
-                    dvel=np.append(dvel,vel_subhalo-vel_main_subhalo)
-                    radius=np.sqrt(np.sum(dpos*dpos))
-                    vrad=np.sum(dpos*dvel)/radius
-                    mass=np.append(mass,self.SubhaloMass[Treeindex])
-                    time=np.append(time,self.Time[self.SnapNum[Treeindex]])
-                    k+=1
-                Treeindex=self.TreeMainProgenitor[Treeindex]
-            subhalo_time.append(time)
-            subhalo_mass.append(mass)
-            subhalo_pos.append(dpos.reshape(k,3))
-            subhalo_vel.append(dvel.reshape(k,3))
- 
-            num_in_FOF+=1
-            FOFindex=self.TreeNextHaloInFOFgroup[FOFindex]
-
-        return num_in_FOF,subhalo_time,subhalo_mass,subhalo_pos,subhalo_vel
-    
-    def FindSubhaloIndexInMergerTree(self,ObjectID,ObjectType,SnapNum):
-        if ObjectType=='Group':
-            SubhaloID=self.GroupFirstSub[ObjectID]
-        else:
-            SubhaloID=ObjectID
-        SubhaloIndex=np.where(self.SnapNum==SnapNum)[0][np.where(self.SubhaloNr[np.where(self.SnapNum==SnapNum)[0]]==SubhaloID)[0]][0]
-        TreeID=self.TreeHalosID[SubhaloIndex]
-        return SubhaloIndex,TreeID
-                    
-    def GetMergerTreeIDBounds(self,TreeID):
-        TreeIDStart=tree.TreeOffset[TreeID]
-        TreeIDEnd=TreeIDStart+tree.TreeLength[TreeID]
-        return TreeIDStart,TreeIDEnd        
-
-    """ Trees for the subhalos within a FOF group are grouped together in the same tree structure.
+class MergerTreeTools:
     """
-    def GetMergerTree(self,TreeID):
-        TreeIDStart,TreeIDFinish=self.GetMergerTreeIDBounds(TreeID)
-        tree_index=self.TreeHalosIndex[TreeIDStart:TreeIDFinish]
-        tree_prog=self.TreeProgenitor[TreeIDStart:TreeIDFinish]
-        tree_des=self.TreeDescendant[TreeIDStart:TreeIDFinish]
-        tree_nextdes=self.TreeNextDescendant[TreeIDStart:TreeIDFinish]
-        tree_nextprog=self.TreeNextProgenitor[TreeIDStart:TreeIDFinish]
-        tree_grpnum=self.GrpNr[TreeIDStart:TreeIDFinish]
-        tree_subnum=self.SubhaloNr[TreeIDStart:TreeIDFinish]
-        tree_snapnum=self.SnapNum[TreeIDStart:TreeIDFinish]
-        
-        edge_list=[]
-        snap_list=[]
-        coords_list={}
-        
-        index=0
-        i=0
-        coords_list[index]=[i,tree_snapnum[index]]
+    Unified high-level interface to load a merger tree and extract/plot
+    HaloTrack objects for individual halos or subhalos.
 
-        while tree_prog[index]!=-1:
-#            coords_list[index]=[i,tree_snapnum[index]]
-            edge_list+=[[index,tree_prog[index]]]
-            snap_list+=[[index,tree_prog[index],tree_snapnum[index],tree_snapnum[tree_prog[index]]]]
-            num_progenitors=0
-            prindex=tree_prog[index]
-            j=i+0.1
-            while tree_nextprog[prindex]!=-1:
-                edge_list+=[[index,tree_nextprog[prindex]]]        
-                snap_list+=[[index,tree_nextprog[prindex],tree_snapnum[index],tree_snapnum[tree_nextprog[prindex]]]]                
-                num_progenitors+=1
-                prindex=tree_nextprog[prindex]         
-                if prindex!=-1:
-                    coords_list[prindex]=[j,tree_snapnum[prindex]]
-                j+=0.1
-                    
-#            print(tree.Time[tree_snapnum[index]],index,tree_subnum[index],tree_subnum[tree_des[index]],tree_nextprog[index],tree_subnum[tree_des[tree_nextprog[index]]],num_progenitors)
-            index=tree_prog[index]
-#            i+=1
-            
-            if index!=-1:
-                coords_list[index]=[i,tree_snapnum[index]]
-            
-            if tree_snapnum[index]<55:
-                break
+    Parameters
+    ----------
+    treefilename : str
+        Path to the tree file.
+    treefileformat : str
+        One of "SubFind", "TreeFrog", "MergerTree" (AHF).
+    comoving_units : bool
+        If True, positions/masses are converted to comoving units on read.
+    halo_tools : HaloTools, optional
+        A linked catalogue reader, enabling `from_halo()` and (for AHF)
+        per-snapshot property lookups.
+    """
 
-        
-        return edge_list,coords_list,snap_list
-    
-    def plot_orbits(self,HaloID,f_size=1,amin=0.2,amax=1.0,rmin=0.0,rmax=2.0,plot_redshift=False,**kwargs):
-        self.ReadMergerTreeFile()
-        n,a,m,pos,vel=self.TrackMainHaloProgenitorsOfFOF(HaloID,SnapNum)
-        rhocrit_0=27.755
-        delta_vir=200
-        rhocrit_z=rhocrit_0*np.sqrt(self.Omega0*self.time_main_branch**-3.+self.OmegaLambda)
-        r200_z=f_size*(3*self.mass_main_branch/4./np.pi/delta_vir/rhocrit_z)**(1./3.)
-        r200_z*=self.time_main_branch
+    SUPPORTED_FORMATS = ("SubFind", "TreeFrog", "MergerTree")
 
-        fig=plt.figure(figsize=(8,8))
-        ax=fig.add_subplot(111)
+    def __init__(
+        self,
+        treefilename: str,
+        treefileformat: str,
+        comoving_units: bool = False,
+        halo_tools: Optional["object"] = None,
+        **kwargs,
+    ):
+        if treefileformat not in self.SUPPORTED_FORMATS:
+            raise ValueError(f"Unsupported tree format '{treefileformat}'. "
+                              f"Must be one of {self.SUPPORTED_FORMATS}.")
 
-        if plot_redshift==True:                
-            ax.set_xlim(1./amin-1,1./amax-1)
+        self.treefilename = treefilename
+        self.treefileformat = treefileformat
+        self.comoving_units = comoving_units
+        self.halo_tools = halo_tools
+
+        self.metadata: Dict[str, Any] = {}
+        self.data = None            # format-specific data container, set by read_tree()
+        self.BoxSize: Optional[float] = None
+        self._loaded = False
+
+        self.logger = logging.getLogger(__name__)
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            self.logger.addHandler(handler)
+            self.logger.propagate = False
+        self.logger.setLevel(kwargs.get("loglevel", logging.INFO))
+
+        self.read_tree()
+
+    # ------------------------------------------------------------------
+    # Reading (dispatch to treeio_*.py)
+    # ------------------------------------------------------------------
+
+    def read_tree(self) -> None:
+        """Dispatch to the format-specific reader. Safe to call once; the
+        constructor already calls this, so you shouldn't normally need to."""
+        if self._loaded:
+            return
+        if self.treefileformat == "SubFind":
+            self.data = read_subfind_hbt(
+                self.treefilename, comoving=self.comoving_units, logger=self.logger)
+        elif self.treefileformat == "TreeFrog":
+            self.data = read_treefrog(
+                self.treefilename, comoving=self.comoving_units, logger=self.logger)
+        elif self.treefileformat == "MergerTree":
+            self.data = read_ahf_mergertree(
+                self.treefilename, snapnum_id_multiplier=AHF_SNAPNUM_ID_MULTIPLIER,
+                logger=self.logger)
         else:
-            ax.set_xlim(amin,amax)
-        ax.set_ylim(rmin,rmax)
+            raise MergerTreeError(f"Unhandled format '{self.treefileformat}'")
 
-        for i in range(n):
-            r=np.array([])
-            for j in range(len(a[i])):
-                r=np.append(r,np.sqrt(np.sum(pos[i][j]**2)))
-            if plot_redshift==True:
-                ax.plot(1./a[i]-1,r)
+        self.metadata = self.data.metadata
+        self.BoxSize = getattr(self.data, "BoxSize", None)  # only SubFind-HBT carries this
+        self._loaded = True
+
+    # ------------------------------------------------------------------
+    # Main-branch walk -> HaloTrack (dispatch to treeio_*.py)
+    # ------------------------------------------------------------------
+
+    def get_track(self, halo_id: int, snapnum: int, object_type: str = "Subhalo",
+                   max_length: int = 100_000) -> HaloTrack:
+        """
+        Walk the main branch of the tree starting from (halo_id, snapnum)
+        back to the root, and return it as a HaloTrack ordered from the
+        earliest snapshot to `snapnum`.
+
+        Parameters
+        ----------
+        halo_id : int
+            Halo/subhalo ID as it appears in the halo catalogue at `snapnum`
+            (for SubFind/TreeFrog), or the AHF MergerTree ID (for AHF).
+        snapnum : int
+            Snapshot number at which `halo_id` is defined.
+        object_type : {"Subhalo", "Group"}
+            If "Group", `halo_id` (a GroupNr) is resolved to its central
+            subhalo *using the tree file itself* -- the halo catalogue
+            doesn't carry a first-subhalo pointer, but the tree's
+            TreeFirstHaloInFOFgroup does. Only meaningful for SubFind.
+        """
+        if object_type not in ("Subhalo", "Group"):
+            raise ValueError("object_type must be 'Subhalo' or 'Group'")
+
+        if object_type == "Group":
+            halo_id = self._resolve_group_first_sub(halo_id, snapnum)
+
+        if self.treefileformat == "SubFind":
+            return walk_subfind(self.data, halo_id, snapnum, max_length)
+        elif self.treefileformat == "TreeFrog":
+            return walk_treefrog(self.data, halo_id, snapnum, max_length)
+        elif self.treefileformat == "MergerTree":
+            return walk_ahf(self.data, halo_id, snapnum, max_length,
+                             halo_tools_obj=self.halo_tools,
+                             time_array=getattr(self, "Time", None))
+        raise MergerTreeError(f"Unhandled format '{self.treefileformat}'")
+
+    def _resolve_group_first_sub(self, group_id: int, snapnum: int) -> int:
+        if self.treefileformat != "SubFind":
+            raise MergerTreeError(
+                f"object_type='Group' resolution is only implemented for "
+                f"SubFind-HBT trees, not '{self.treefileformat}'.")
+        return resolve_group_first_sub(self.data, group_id, snapnum)
+
+    def get_group_members(self, group_id: int, snapnum: int,
+                           include_central: bool = False) -> List[int]:
+        """
+        List the SubhaloNr of every subhalo belonging to FOF group `group_id`
+        at `snapnum` (SubFind-HBT only -- TreeFrog/AHF track subhalo
+        membership via hostHaloID per-object rather than a group table, so
+        there's no single group-membership query for them here).
+
+        Parameters
+        ----------
+        include_central : bool
+            If False (default), excludes the group's own central subhalo,
+            i.e. returns only the satellites.
+        """
+        if self.treefileformat != "SubFind":
+            raise MergerTreeError(
+                f"get_group_members() is only implemented for SubFind-HBT "
+                f"trees, not '{self.treefileformat}'.")
+        return _subfind_get_group_members(self.data, group_id, snapnum,
+                                           include_central=include_central)
+
+    def get_group_subhalo_tracks(self, group_id: int, snapnum: int,
+                                  include_central: bool = False) -> Dict[int, HaloTrack]:
+        """
+        Convenience wrapper around get_group_members() + get_track(): returns
+        {subhalo_id: HaloTrack} for every (satellite) member of the group.
+        """
+        members = self.get_group_members(group_id, snapnum, include_central=include_central)
+        return {sub_id: self.get_track(sub_id, snapnum, object_type="Subhalo") for sub_id in members}
+
+    # ------------------------------------------------------------------
+    # Integration with HaloTools
+    # ------------------------------------------------------------------
+
+    def from_halo(self, halo_tools_obj, index: int, object_type: str = "Subhalo",
+                   snapnum: Optional[int] = None, id_field: Optional[str] = None,
+                   standardised: bool = True) -> HaloTrack:
+        """
+        Convenience wrapper: given a HaloTools instance and the row index of
+        a halo/subhalo of interest in its currently-loaded catalogue,
+        extract the ID and return the corresponding HaloTrack.
+
+        Parameters
+        ----------
+        snapnum : int, optional
+            Snapshot the catalogue was read at. If not given, taken from
+            `halo_tools_obj.snapnum` (set automatically if you passed
+            `snapnum=` to `read_catalogue`). One of the two is required.
+        id_field : str, optional
+            Field name to read the halo ID from. Defaults to the
+            standardised key "halo_id" if `standardised=True`, otherwise to
+            RAW_ID_FIELD[(treefileformat, object_type)]. Override this if
+            neither matches your catalogue.
+        standardised : bool
+            Whether `halo_tools_obj.halos`/`.subhalos` were produced with
+            `read_catalogue(..., standardise=True)`. SubFind Subhalo tables
+            have no stored ID field (subhalo N is just row N of the
+            Subhalo/* arrays), so this is handled either way -- via the
+            standardised "halo_id" column (populated as arange(n) by
+            halo_tools_standardise_names.py) or, with standardised=False,
+            directly as the row index.
+        """
+        if standardised:
+            table = halo_tools_obj.standardised_subhalos if object_type == "Subhalo" \
+                else halo_tools_obj.standardised_halos
+        else:
+            table = halo_tools_obj.subhalos if object_type == "Subhalo" else halo_tools_obj.halos
+        if table is None:
+            raise MergerTreeError(
+                f"No {'standardised ' if standardised else ''}{object_type.lower()} "
+                f"catalogue loaded on halo_tools_obj. "
+                f"{'Call read_catalogue(..., standardise=True) first.' if standardised else ''}")
+
+        if snapnum is None:
+            snapnum = getattr(halo_tools_obj, "snapnum", None)
+        if snapnum is None:
+            raise MergerTreeError(
+                "Could not determine the snapshot number. Either pass "
+                "snapnum=... explicitly, or call "
+                "halo_tools_obj.read_catalogue(..., snapnum=...) so it's "
+                "recorded automatically.")
+
+        if id_field is None:
+            id_field = STD_ID_FIELD if standardised else \
+                RAW_ID_FIELD.get((self.treefileformat, object_type))
+
+        if id_field == ROW_INDEX_SENTINEL:
+            halo_id = index
+        else:
+            if id_field is None or id_field not in table or table[id_field] is None:
+                raise MergerTreeError(
+                    f"Could not find a usable ID field ('{id_field}') in the "
+                    f"{object_type.lower()} catalogue (fields: {list(table)}). "
+                    f"Try standardised={not standardised}, or pass "
+                    f"id_field=... explicitly.")
+            halo_id = table[id_field][index]
+
+        return self.get_track(int(halo_id), int(snapnum), object_type=object_type)
+
+    # ------------------------------------------------------------------
+    # Analysis (format-agnostic: works purely off HaloTrack objects)
+    # ------------------------------------------------------------------
+
+    def find_infall(self, track: HaloTrack) -> Optional[Dict[str, Any]]:
+        """Thin wrapper around HaloTrack.infall_snapshot() for symmetry
+        with the rest of the API."""
+        return track.infall_snapshot()
+
+    def analyse_orbit(self, track: HaloTrack, reference_track: HaloTrack,
+                       radius_key: str = "GroupR200",
+                       boxsize: Optional[float] = None) -> OrbitAnalysis:
+        """
+        Compute `track`'s orbit relative to `reference_track` (typically the
+        host halo's main progenitor), decomposed into radial and tangential
+        velocity components, over the snapshots the two tracks share.
+
+        Parameters
+        ----------
+        radius_key : str
+            Key into `reference_track.extra` holding the reference's virial
+            (or other infall) radius at each snapshot. Defaults to
+            "GroupR200", which SubFind-HBT tracks carry automatically. If
+            absent, the returned OrbitAnalysis.Rvir is None and
+            first_crossing() will return None -- pass your own radius_key
+            (and make sure it's on the reference track's `extra`) for other
+            tree formats.
+        boxsize : float, optional
+            Defaults to self.BoxSize (available for SubFind-HBT trees) for
+            periodic wrapping of the separation vector.
+        """
+        if boxsize is None:
+            boxsize = getattr(self, "BoxSize", None)
+
+        snaps_common, i_self, i_ref = np.intersect1d(
+            track.SnapNum, reference_track.SnapNum, return_indices=True)
+        if snaps_common.size == 0:
+            raise MergerTreeError("Track and reference track share no common snapshots.")
+
+        dpos = periodic_delta(track.Pos[i_self] - reference_track.Pos[i_ref], boxsize)
+        dvel = track.Vel[i_self] - reference_track.Vel[i_ref]
+
+        distance = np.linalg.norm(dpos, axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            r_hat = np.where(distance[:, None] > 0, dpos / distance[:, None], 0.0)
+        radial_vel = np.sum(dvel * r_hat, axis=1)
+        tangential_vec = dvel - radial_vel[:, None] * r_hat
+        tangential_vel = np.linalg.norm(tangential_vec, axis=1)
+        rel_speed = np.linalg.norm(dvel, axis=1)
+
+        rvir = reference_track.extra.get(radius_key)
+        rvir_common = rvir[i_ref] if rvir is not None else None
+
+        return OrbitAnalysis(
+            halo_id=track.halo_id, host_id=reference_track.halo_id,
+            SnapNum=snaps_common, Redshift=track.Redshift[i_self], Time=track.Time[i_self],
+            Distance=distance, RelVel=rel_speed,
+            RadialVelocity=radial_vel, TangentialVelocity=tangential_vel,
+            Mass=track.Mass[i_self], Rvir=rvir_common,
+        )
+
+    # ------------------------------------------------------------------
+    # Plotting
+    # ------------------------------------------------------------------
+
+    def plot_track(self, track: HaloTrack, quantities: Tuple[str, ...] = ("Mass", "Speed", "Position"),
+                    use_redshift: bool = False, mark_infall: bool = True,
+                    figsize: Tuple[float, float] = (7, 8)) -> "plt.Figure":
+        """
+        Plot a HaloTrack in isolation: mass, speed, and position components
+        vs. time (or redshift), stacked as subplots. `quantities` can
+        include "Mass", "Speed", "Position", "Vmax", "VmaxRad", or any
+        key in track.extra.
+        """
+        x = 1.0 / track.Time - 1.0 if use_redshift else track.Time
+        xlabel = "Redshift" if use_redshift else "Expansion Factor"
+
+        fig, axes = plt.subplots(len(quantities), 1, figsize=figsize, sharex=True)
+        if len(quantities) == 1:
+            axes = [axes]
+
+        infall = track.infall_snapshot() if mark_infall else None
+        x_infall = (1.0 / infall["time"] - 1.0) if (infall and use_redshift) else \
+                   (infall["time"] if infall else None)
+
+        for ax, q in zip(axes, quantities):
+            if q == "Mass":
+                ax.plot(x, track.Mass, color="black")
+                ax.set_yscale("log")
+                ax.set_ylabel("Mass")
+            elif q == "Speed":
+                speed = np.linalg.norm(track.Vel, axis=1)
+                ax.plot(x, speed, color="darkred")
+                ax.set_ylabel("|Velocity|")
+            elif q == "Position":
+                for i, label in enumerate(("x", "y", "z")):
+                    ax.plot(x, track.Pos[:, i], label=label)
+                ax.set_ylabel("Position")
+                ax.legend(fontsize=8, ncol=3)
             else:
-                ax.plot(a[i],r)
-        if plot_redshift==True:                
-            ax.plot(1./self.time_main_branch-1,r200_z,lw=3,ls=":",color="black")
-            ax.set_xlabel("Redshift")            
-        else:
-            ax.plot(self.time_main_branch,r200_z,lw=3,ls=":",color="black")
-            ax.set_xlabel("Expansion Factor")
-            
-        ax.set_ylabel("Subhalo Radius [pMpc/h]")
+                ax.plot(x, track.get(q), color="steelblue")
+                ax.set_ylabel(q)
+
+            if x_infall is not None:
+                ax.axvline(x_infall, color="grey", ls=":", lw=1.5)
+
+        axes[-1].set_xlabel(xlabel)
+        if not use_redshift:
+            axes[-1].set_xlim(0, 1)
+        fig.suptitle(f"Halo {track.halo_id} ({track.treefileformat})")
+        fig.tight_layout()
         return fig
-        
-    def plot_halo(self,SubhaloID,SnapNum,f_size=1,**kwargs):
-        self.ReadMergerTreeFile()
-        self.ReadHaloCatalogue()
-        self.ReadSnapshot()
-        n,a,m,pos,vel=self.TrackMainHaloProgenitorsOfFOF(SubhaloID,SnapNum)
 
-        GroupID=self.SubhaloGroupNr[SubhaloID]
-        print(n,self.GroupNsubs[GroupID])        
-        pos_subhalos=np.array([])
-        num_subs=0
-        for i in range(len(pos)):
-            if len(pos[i])>0:
-                num_subs+=1
-                j=np.where(np.abs(a[i]-self.GroupAscale[GroupID])<1.e-4)[0]
-                pos_subhalos=np.append(pos_subhalos,pos[i][j])
-        pos_subhalos=pos_subhalos.reshape(num_subs,3)
-        
-        r200_z=self.GroupR200[GroupID]*self.GroupAscale[GroupID]
+    def plot_relative(self, track: HaloTrack, reference_track: HaloTrack,
+                       boxsize: Optional[float] = None, use_redshift: bool = False,
+                       mark_infall: bool = True,
+                       figsize: Tuple[float, float] = (7, 6)) -> "plt.Figure":
+        """
+        Plot a HaloTrack's separation and relative velocity from a reference
+        (e.g. host/central) track, over the snapshots the two tracks share.
+        Positions are periodically wrapped using `boxsize` (defaults to
+        self.BoxSize if available, from a SubFind-HBT tree).
+        """
+        if boxsize is None:
+            boxsize = getattr(self, "BoxSize", None)
 
-        virial_circle=plt.Circle((0,0),self.GroupR200[GroupID],color="black",fill=False,lw=3,ls=":")
+        snaps_common, i_self, i_ref = np.intersect1d(
+            track.SnapNum, reference_track.SnapNum, return_indices=True)
+        if snaps_common.size == 0:
+            raise MergerTreeError("Track and reference track share no common snapshots.")
 
-        fig=plt.figure(figsize=(8,8))        
-        ax=fig.add_subplot(111)
-        ax.set_xlim(f_size*r200_z,-f_size*r200_z)
-        ax.set_ylim(f_size*r200_z,-f_size*r200_z)
-        
-        ax.scatter((self.pos-self.GroupPos[GroupID])[:,0],(self.pos-self.GroupPos[GroupID])[:,1],s=0.01,color="grey",alpha=0.3)        
+        dpos = track.Pos[i_self] - reference_track.Pos[i_ref]
+        dpos = periodic_delta(dpos, boxsize)
+        dvel = track.Vel[i_self] - reference_track.Vel[i_ref]
 
-        # istart=self.SubhaloOffsetType[SubaloID][1]
-        # ifinish=istart+np.sum(tree.SubhaloLen[np.where(tree.SubhaloGroupNr==tree.SubhaloGroupNr[HaloID])[0]])
-        
-        # ax.scatter(self.pos[istart:ifinish,1]-self.SubPos[HaloID][1],self.pos[istart:ifinish,2]-self.SubPos[HaloID][2],s=0.01,color="blue")        
-        ax.scatter(pos_subhalos[:,1],pos_subhalos[:,2],marker="*",color="red")
-        # ax.scatter(self.SubPos[0:self.GroupNsubs[0]-1,1]-self.GroupPos[HaloID][1],self.SubPos[0:self.GroupNsubs[0]-1,2]-self.GroupPos[HaloID][2],s=1,color="green")
+        distance = np.linalg.norm(dpos, axis=1)
+        rel_speed = np.linalg.norm(dvel, axis=1)
+        time = track.Time[i_self]
+        x = 1.0 / time - 1.0 if use_redshift else time
+        xlabel = "Redshift" if use_redshift else "Expansion Factor"
 
-        plt.gca().add_patch(virial_circle)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
+        ax1.plot(x, distance, color="black")
+        ax1.set_ylabel("Separation")
+        ax2.plot(x, rel_speed, color="darkred")
+        ax2.set_ylabel("|Relative Velocity|")
+        ax2.set_xlabel(xlabel)
 
-        ax.set_xlabel("X [Mpc/h]")
-        ax.set_ylabel("Y [Mpc/h]")
+        if mark_infall:
+            infall = track.infall_snapshot()
+            if infall is not None:
+                x_infall = (1.0 / infall["time"] - 1.0) if use_redshift else infall["time"]
+                for ax in (ax1, ax2):
+                    ax.axvline(x_infall, color="grey", ls=":", lw=1.5)
+                ax1.annotate(f"infall  z={infall['redshift']:.2f}\n"
+                             f"M={infall['mass']:.3g}",
+                             xy=(x_infall, distance[np.searchsorted(x if not use_redshift else -x,
+                                                                     x_infall if not use_redshift else -x_infall)]
+                                 if False else distance.max()),
+                             xytext=(5, 0), textcoords="offset points", fontsize=8, color="grey")
+
+        if not use_redshift:
+            ax2.set_xlim(0, 1)
+        fig.suptitle(f"Halo {track.halo_id} relative to {reference_track.halo_id}")
+        fig.tight_layout()
         return fig
-        
-# def GetMainBranchLength(SnapShotNr):
-#     ids=np.where(tree.SnapNum==SnapShotNr)[0]
-#     ids=np.where(tree.TreeHalosIndex[ids]==0)[0]
-#     num_halos=len(ids)
-#     length_branch=np.array([],dtype=np.int32)
-#     for i in range(num_halos-1):
-#         index=ids[i]
-#         j=0
-#         while tree.TreeMainProgenitor[index] != -1:
-#             j=j+1 
-#             index=tree.TreeMainProgenitor[index]
-#         length_branch=np.append(length_branch,j)
-#     return length_branch
-    
+
+    # ------------------------------------------------------------------
+
+    def plot_orbits(self, orbits: Dict[Any, "OrbitAnalysis"], reference_track: HaloTrack,
+                     use_redshift: bool = False, normalize_by_rvir: bool = False,
+                     mark_crossing: bool = True, figsize: Tuple[float, float] = (7, 5)) -> "plt.Figure":
+        """
+        Overlay several subhalos' orbits (distance from host vs. time) on one
+        axes, with the host's virial radius drawn as a reference curve and
+        each subhalo's first virial-radius crossing marked.
+
+        Parameters
+        ----------
+        orbits : dict
+            {subhalo_id: OrbitAnalysis}, e.g. from
+            {sid: mt.analyse_orbit(track, host_track) for sid, track in
+             mt.get_group_subhalo_tracks(group_id, snapnum).items()}
+        reference_track : HaloTrack
+            The host track the orbits were computed relative to (used here
+            only to draw Rvir(t); pass the same one used in analyse_orbit).
+        normalize_by_rvir : bool
+            If True, plot Distance / Rvir(t) instead of raw Distance (so the
+            host's virial radius becomes the horizontal line y=1).
+        """
+        x_ref = 1.0 / reference_track.Time - 1.0 if use_redshift else reference_track.Time
+        xlabel = "Redshift" if use_redshift else "Expansion Factor"
+
+        fig, ax = plt.subplots(figsize=figsize)
+        rvir = reference_track.extra.get("GroupR200")
+
+        if not normalize_by_rvir and rvir is not None:
+            ax.plot(x_ref, rvir, color="black", lw=2, label=r"Host $R_{200}$", zorder=5)
+        elif normalize_by_rvir:
+            ax.axhline(1.0, color="black", lw=2, label=r"Host $R_{200}$", zorder=5)
+
+        cmap = plt.get_cmap("tab10")
+        for i, (sub_id, orb) in enumerate(orbits.items()):
+            x = 1.0 / orb.Time - 1.0 if use_redshift else orb.Time
+            y = orb.Distance / orb.Rvir if (normalize_by_rvir and orb.Rvir is not None) else orb.Distance
+            color = cmap(i % 10)
+            ax.plot(x, y, color=color, lw=1.2, label=f"Subhalo {sub_id}")
+
+            if mark_crossing:
+                crossing = orb.first_crossing()
+                if crossing is not None:
+                    x_c = (1.0 / crossing["time"] - 1.0) if use_redshift else crossing["time"]
+                    y_c = 1.0 if normalize_by_rvir else crossing["distance"]
+                    ax.scatter([x_c], [y_c], color=color, edgecolor="black", zorder=6, s=40)
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(r"Distance / $R_{200}$" if normalize_by_rvir else "Distance from host")
+        if not use_redshift:
+            ax.set_xlim(0, 1)
+        ax.legend(fontsize=8, ncol=2)
+        fig.suptitle(f"Subhalo orbits about host {reference_track.halo_id}")
+        fig.tight_layout()
+        return fig
+
+    def summary(self) -> None:
+        print("Merger Tree Summary")
+        print(f"  Format: {self.treefileformat}")
+        print(f"  File:   {os.path.basename(self.treefilename)}")
+        for k, v in self.metadata.items():
+            print(f"  {k:20s}: {v}")

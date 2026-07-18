@@ -18,84 +18,86 @@ from scipy.spatial import cKDTree
 
 from numba import njit
 
-@njit
-def ngp_assign(grid, coords, values, grid_size):
-    """
-    Nearest-Grid-Point (NGP) assignment.
-    """
-    n_particles, dim = coords.shape
-    # Ensure grid_size elements are int64
-    grid_size = grid_size.astype(np.int64)
-
-    for p in range(n_particles):
-        idx = np.empty(dim, dtype=np.int64)
-        fx = np.empty(dim, dtype=np.float64)
-        
-        for d in range(dim):
-            x = coords[p, d]
-            i = int(np.floor(x))
-            idx[d] = i
-        
-        if dim == 3:
-            i, j, k = idx
-            grid[i, j, k] += values[p]
-        else:
-            # Implement 2D case if needed
-            raise NotImplementedError("Only 3D CIC implemented.")
-
-
-@njit
-def cic_assign(grid, coords, values, grid_size):
-    """
-    Cloud-In-Cell (CIC) assignment.
-    """
-    n_particles, dim = coords.shape
-    # Ensure grid_size elements are int64
-    grid_size = grid_size.astype(np.int64)
-
-    for p in range(n_particles):
-        idx = np.empty(dim, dtype=np.int64)
-        fx = np.empty(dim, dtype=np.float64)
-        
-        for d in range(dim):
-            x = coords[p, d]
-            i = int(np.floor(x))
-            f = x - i
-            idx[d] = i
-            fx[d] = f
-        
-        if dim == 3:
-            i, j, k = idx
-            fx_i, fx_j, fx_k = fx
-            
-            # Compute weights
-            w000 = (1-fx_i)*(1-fx_j)*(1-fx_k)
-            w100 = fx_i*(1-fx_j)*(1-fx_k)
-            w010 = (1-fx_i)*fx_j*(1-fx_k)
-            w001 = (1-fx_i)*(1-fx_j)*fx_k
-            w101 = fx_i*(1-fx_j)*fx_k
-            w011 = (1-fx_i)*fx_j*fx_k
-            w110 = fx_i*fx_j*(1-fx_k)
-            w111 = fx_i*fx_j*fx_k
-            
-            # Periodic boundaries
-            Nx, Ny, Nz = grid_size
-            grid[i % Nx, j % Ny, k % Nz] += values[p] * w000
-            grid[(i+1) % Nx, j % Ny, k % Nz] += values[p] * w100
-            grid[i % Nx, (j+1) % Ny, k % Nz] += values[p] * w010
-            grid[i % Nx, j % Ny, (k+1) % Nz] += values[p] * w001
-            grid[(i+1) % Nx, j % Ny, (k+1) % Nz] += values[p] * w101
-            grid[i % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * w011
-            grid[(i+1) % Nx, (j+1) % Ny, k % Nz] += values[p] * w110
-            grid[(i+1) % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * w111
-
-        else:
-            # Implement 2D case if needed
-            raise NotImplementedError("Only 3D CIC implemented.")
-
 class GriddingTools:
     def __init__(self):
         pass
+
+    @staticmethod
+    @njit
+    def ngp_assign(grid, coords, values, grid_size):
+        """
+        Nearest-Grid-Point (NGP) assignment.
+        """
+        n_particles, dim = coords.shape
+        # Ensure grid_size elements are int64
+        grid_size = grid_size.astype(np.int64)
+
+        for p in range(n_particles):
+            idx = np.empty(dim, dtype=np.int64)
+            fx = np.empty(dim, dtype=np.float64)
+            
+            for d in range(dim):
+                x = coords[p, d]
+                i = int(np.floor(x))
+                idx[d] = i
+            
+            if dim == 3:
+                i, j, k = idx
+                grid[i, j, k] += values[p]
+            else:
+                # Implement 2D case if needed
+                raise NotImplementedError("Only 3D CIC implemented.")
+
+    @staticmethod
+    @njit
+    def cic_assign(grid, coords, values, grid_size):
+        """
+        Cloud-In-Cell (CIC) assignment.
+        """
+        n_particles, dim = coords.shape
+        # Ensure grid_size elements are int64
+        grid_size = grid_size.astype(np.int64)
+
+        for p in range(n_particles):
+            idx = np.empty(dim, dtype=np.int64)
+            fx = np.empty(dim, dtype=np.float64)
+            
+            for d in range(dim):
+                x = coords[p, d]
+                i = int(np.floor(x))
+                f = x - i
+                idx[d] = i
+                fx[d] = f
+            
+            if dim == 3:
+                i, j, k = idx
+                fx_i, fx_j, fx_k = fx
+                
+                # Compute weights
+                w000 = (1-fx_i)*(1-fx_j)*(1-fx_k)
+                w100 = fx_i*(1-fx_j)*(1-fx_k)
+                w010 = (1-fx_i)*fx_j*(1-fx_k)
+                w001 = (1-fx_i)*(1-fx_j)*fx_k
+                w101 = fx_i*(1-fx_j)*fx_k
+                w011 = (1-fx_i)*fx_j*fx_k
+                w110 = fx_i*fx_j*(1-fx_k)
+                w111 = fx_i*fx_j*fx_k
+                
+                # Periodic boundaries
+                Nx, Ny, Nz = grid_size
+                grid[i % Nx, j % Ny, k % Nz] += values[p] * w000
+                grid[(i+1) % Nx, j % Ny, k % Nz] += values[p] * w100
+                grid[i % Nx, (j+1) % Ny, k % Nz] += values[p] * w010
+                grid[i % Nx, j % Ny, (k+1) % Nz] += values[p] * w001
+                grid[(i+1) % Nx, j % Ny, (k+1) % Nz] += values[p] * w101
+                grid[i % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * w011
+                grid[(i+1) % Nx, (j+1) % Ny, k % Nz] += values[p] * w110
+                grid[(i+1) % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * w111
+
+            else:
+                # Implement 2D case if needed
+                raise NotImplementedError("Only 3D CIC implemented.")
+
 
     def smooth_to_grid(self, positions, values, grid_size, grid_limits,
                        method="NGP", sigma=1.0, filter_sigma=None):
@@ -116,7 +118,6 @@ class GriddingTools:
         """
         dim = len(grid_size)
         grid = np.zeros(grid_size, dtype=float)
-
         # Grid spacing
         spacing = [(grid_limits[2*i+1] - grid_limits[2*i]) / grid_size[i] 
                    for i in range(dim)]
@@ -126,11 +127,11 @@ class GriddingTools:
         coords = np.stack(coords, axis=1)
 
         if method.upper() == "NGP":
-            ngp_assign(grid, coords, values, grid_size)
+            self.ngp_assign(grid, coords, values, grid_size)
         elif method.upper() == "CIC":
-            cic_assign(grid, coords, values, grid_size)
+            self.cic_assign(grid, coords, values, grid_size)
         elif method.upper() == "GAUSSIAN":
-            cic_assign(grid, coords, values, grid_size)
+            self.cic_assign(grid, coords, values, grid_size)
             grid = gaussian_filter(grid, sigma=sigma)
 
         # Optional additional smoothing
