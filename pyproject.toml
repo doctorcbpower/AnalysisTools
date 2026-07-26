@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "analysistools"
+version = "0.2.0"
+description = "Tools for processing astrophysical simulations: snapshots, halo catalogues, merger trees, and SHARK galaxy catalogues, with a unified Dataset interface"
+readme = "README.md"
+license = { text = "GPL-3.0" }
+authors = [
+    { name = "Chris Power", email = "chris.power@uwa.edu.au" },
+    { name = "Balu Sreedhar" },
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "h5py",
+    "numba",
+    "matplotlib",
+    "plotly",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+notebooks = ["nbformat", "nbclient", "ipykernel", "matplotlib-inline"]
+photometry = ["fsps"]        # python-fsps, for shark.photometry
+
+[project.urls]
+Repository = "https://github.com/doctorcbpower/AnalysisTools"
+
+[tool.setuptools.packages.find]
+include = ["analysistools*", "shark*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # the top-level shark shim warns by design; tests exercise it directly
+    "ignore:'import shark' is deprecated:DeprecationWarning",
+]
