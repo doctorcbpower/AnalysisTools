@@ -217,7 +217,8 @@ class MergerTreeTools:
         if self.treefileformat == "SubFind":
             return walk_subfind(self.data, halo_id, snapnum, max_length)
         elif self.treefileformat == "TreeFrog":
-            return walk_treefrog(self.data, halo_id, snapnum, max_length)
+            return walk_treefrog(self.data, halo_id, snapnum, max_length,
+                                  halo_tools_obj=self.halo_tools)
         elif self.treefileformat == "MergerTree":
             return walk_ahf(self.data, halo_id, snapnum, max_length,
                              halo_tools_obj=self.halo_tools,

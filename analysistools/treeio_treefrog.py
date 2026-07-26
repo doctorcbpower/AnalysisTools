@@ -50,10 +50,78 @@ class TreeFrogTreeData:
     lookup: Dict[Tuple[int, int], Tuple[str, int]]
 
 
-def read_treefrog(filename: str, comoving: bool = False, logger=None) -> TreeFrogTreeData:
-    """Read a TreeFrog tree file into a TreeFrogTreeData container."""
+@dataclass
+class TreeFrogWalkableData:
+    """A TreeFrog *walkable tree* (Head/Tail pointer file). Unlike the full
+    tree flavour, it stores only the tree topology per snapshot (groups
+    under 'Snapshots/Snap_NNN'); halo properties (mass, position, ...)
+    stay in the matching halo catalogues. walk_treefrog() fills properties
+    from linked catalogues where available and NaN otherwise."""
+    metadata: Dict[str, Any]
+
+    snap_of_group: Dict[str, int]
+    Time: Dict[int, float]                      # snapnum -> scale factor
+
+    ID: Dict[str, np.ndarray]
+    Tail: Dict[str, np.ndarray]                 # main progenitor (temporal ID)
+    TailSnap: Dict[str, np.ndarray]
+    Num_progen: Dict[str, np.ndarray]
+
+    # (snapnum, halo id) -> (group key, local index within that group)
+    lookup: Dict[Tuple[int, int], Tuple[str, int]]
+
+
+def _read_treefrog_walkable(f, header, logger=None) -> TreeFrogWalkableData:
+    """Read the walkable-tree layout (root groups Header + Snapshots)."""
+    snap_of_group: Dict[str, int] = {}
+    Time: Dict[int, float] = {}
+    ID: Dict[str, np.ndarray] = {}
+    Tail: Dict[str, np.ndarray] = {}
+    TailSnap: Dict[str, np.ndarray] = {}
+    Num_progen: Dict[str, np.ndarray] = {}
+
+    snaps = f["Snapshots"]
+    for group in snaps.keys():
+        g = snaps[group]
+        if int(g.attrs.get("NHalos", 0)) <= 0:
+            continue
+        snapnum = int(g.attrs["Snapnum"])
+        snap_of_group[group] = snapnum
+        Time[snapnum] = float(g.attrs.get("scalefactor", 1.0))
+        ID[group] = g["ID"][()]
+        Tail[group] = g["Tail"][()]
+        TailSnap[group] = g["TailSnap"][()]
+        Num_progen[group] = g["Num_progen"][()] if "Num_progen" in g \
+            else np.zeros(len(ID[group]), dtype=np.uint32)
+
+    lookup: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    for group, snapnum in snap_of_group.items():
+        for local_idx, hid in enumerate(ID[group]):
+            lookup[(snapnum, int(hid))] = (group, local_idx)
+    if logger:
+        logger.info(f"Walkable tree: indexed {len(lookup):,} "
+                    f"(snapshot, halo) tree nodes.")
+
+    return TreeFrogWalkableData(
+        metadata=header, snap_of_group=snap_of_group, Time=Time,
+        ID=ID, Tail=Tail, TailSnap=TailSnap, Num_progen=Num_progen,
+        lookup=lookup,
+    )
+
+
+def read_treefrog(filename: str, comoving: bool = False, logger=None):
+    """Read a TreeFrog tree file.
+
+    Handles both flavours:
+    * full tree (per-snapshot root groups with Progenitor + properties)
+      -> TreeFrogTreeData;
+    * walkable tree (topology-only groups under 'Snapshots/')
+      -> TreeFrogWalkableData.
+    """
     with h5py.File(filename, "r") as f:
         header = dict(f["Header"].attrs.items())
+        if "Snapshots" in f:
+            return _read_treefrog_walkable(f, header, logger=logger)
         if "NSnaps" not in header:
             raise MergerTreeError(f"No trees found in '{filename}'.")
         if logger:
@@ -123,10 +191,121 @@ def read_treefrog(filename: str, comoving: bool = False, logger=None) -> TreeFro
     )
 
 
-def walk_treefrog(data: TreeFrogTreeData, halo_id: int, snapnum: int,
-                   max_length: int = 100_000) -> HaloTrack:
+def _walkable_local_index(hid: int, snapnum: int, tid_val: int) -> int:
+    """TreeFrog temporal-ID convention: ID = snapnum*tid_val + (index+1)."""
+    return int(hid - snapnum * tid_val) - 1
+
+
+def _walk_treefrog_walkable(data: TreeFrogWalkableData, halo_id: int,
+                             snapnum: int, max_length: int = 100_000,
+                             halo_tools_obj=None) -> HaloTrack:
+    """Walk a walkable tree's main branch via Tail pointers.
+
+    Halo properties are not stored in the walkable tree itself; they are
+    filled from linked halo catalogue(s) where available and NaN otherwise.
+
+    Parameters
+    ----------
+    halo_tools_obj : optional
+        Either a single HaloTools-like object (with .snapnum and
+        .standardised_halos), or a dict {snapnum: HaloTools-like}.
+    """
+    key = (int(snapnum), int(halo_id))
+    if key not in data.lookup:
+        raise MergerTreeError(f"(snapnum={snapnum}, id={halo_id}) not found in tree.")
+
+    tid_val = int(data.metadata.get("Temporal_halo_id_value", 1_000_000_000_000))
+
+    # normalise catalogue link to {snapnum: standardised table}
+    tables: Dict[int, Dict[str, np.ndarray]] = {}
+    if halo_tools_obj is not None:
+        objs = halo_tools_obj if isinstance(halo_tools_obj, dict) \
+            else {getattr(halo_tools_obj, "snapnum", None): halo_tools_obj}
+        for snum, obj in objs.items():
+            table = getattr(obj, "standardised_halos", None)
+            if snum is not None and table is not None:
+                tables[int(snum)] = table
+
+    chain: list = []
+    group, local_idx = data.lookup[key]
+    for _ in range(max_length):
+        chain.append((group, local_idx))
+        own_id = int(data.ID[group][local_idx])
+        tail = int(data.Tail[group][local_idx])
+        tail_snap = int(data.TailSnap[group][local_idx])
+        # Root: Tail is a self-loop (walkable-tree convention) or missing.
+        if tail == own_id or tail <= 0:
+            break
+        nxt = (tail_snap, tail)
+        if nxt not in data.lookup:
+            break
+        group, local_idx = data.lookup[nxt]
+
+    chain.reverse()  # earliest -> latest
+
+    n = len(chain)
+    snap = np.array([data.snap_of_group[g] for g, _ in chain])
+    own_id = np.array([data.ID[g][i] for g, i in chain], dtype=np.int64)
+    time = np.array([data.Time[s] for s in snap])
+    redshift = 1.0 / time - 1.0
+
+    mass = np.full(n, np.nan)
+    pos = np.full((n, 3), np.nan)
+    vel = np.full((n, 3), np.nan)
+    is_subhalo = np.zeros(n, dtype=bool)
+    host_id = own_id.copy()
+
+    for j, (s, hid) in enumerate(zip(snap, own_id)):
+        table = tables.get(int(s))
+        if table is None:
+            continue
+        cat_ids = table.get("halo_id")
+        row = None
+        if cat_ids is not None:
+            matches = np.where(np.asarray(cat_ids) == hid)[0]
+            if matches.size:
+                row = int(matches[0])
+        if row is None:
+            # temporal-ID convention fallback: row = ID - snap*tid_val - 1
+            cand = _walkable_local_index(int(hid), int(s), tid_val)
+            ncat = len(next(iter(table.values()))) if table else 0
+            if 0 <= cand < ncat:
+                row = cand
+        if row is None:
+            continue
+        if table.get("mass") is not None:
+            mass[j] = table["mass"][row]
+        if table.get("pos") is not None:
+            pos[j] = table["pos"][row]
+        if table.get("vel") is not None:
+            vel[j] = table["vel"][row]
+        hh = table.get("hostHaloID")
+        if hh is not None and hh[row] != -1:
+            is_subhalo[j] = True
+            host_id[j] = hh[row]
+
+    return HaloTrack(
+        halo_id=halo_id, query_snapnum=snapnum, treefileformat="TreeFrog",
+        SnapNum=snap, Redshift=redshift, Time=time,
+        Mass=mass, Pos=pos, Vel=vel,
+        IsSubhalo=is_subhalo, HostID=host_id,
+        extra={"ID": own_id,
+               "Num_progen": np.array([data.Num_progen[g][i]
+                                       for g, i in chain])},
+    )
+
+
+def walk_treefrog(data, halo_id: int, snapnum: int,
+                   max_length: int = 100_000, halo_tools_obj=None) -> HaloTrack:
     """Walk a TreeFrog tree's main branch starting from (halo_id, snapnum)
-    back to the root, returning a HaloTrack ordered earliest -> latest."""
+    back to the root, returning a HaloTrack ordered earliest -> latest.
+
+    Dispatches on the container type: TreeFrogTreeData (full tree, has
+    its own properties) or TreeFrogWalkableData (topology only; properties
+    filled from `halo_tools_obj` catalogues where available)."""
+    if isinstance(data, TreeFrogWalkableData):
+        return _walk_treefrog_walkable(data, halo_id, snapnum, max_length,
+                                        halo_tools_obj=halo_tools_obj)
     key = (int(snapnum), int(halo_id))
     if key not in data.lookup:
         raise MergerTreeError(f"(snapnum={snapnum}, id={halo_id}) not found in tree.")
