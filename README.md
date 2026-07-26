@@ -22,8 +22,9 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for the roadmap towards a unified interface
 
 | Path | Contents |
 |------|----------|
-| `analysistools/` | Core package: snapshot, halo catalogue, merger tree, profile, gridding, FDM tools |
-| `shark/` | SHARK semi-analytic catalogue tools: `SharkModel` (lazy reader), `Analysis`, `Plotter`, CLI, fsps-based photometry |
+| `analysistools/` | Core package: snapshot, halo catalogue, merger tree, profile, gridding, FDM tools; unified `api/` layer |
+| `analysistools/shark/` | SHARK semi-analytic catalogue tools: `SharkModel` (lazy reader), `Analysis`, `Plotter`, CLI, fsps-based photometry |
+| `shark/` | Deprecated import shim → `analysistools.shark` |
 | `data/` | Small example data: `snap_0031.hdf5`, VELOCIraptor walkable trees, `halos/` catalogues |
 | `notebooks/` | `PlotSimulationAnalysis.ipynb` — worked end-to-end example |
 
@@ -65,7 +66,7 @@ The package is imported as `analysistools`; submodules use relative imports (e.g
 
 ## Unified Interface (new)
 
-`analysistools.load()` opens any supported data product with one call — kind and format sniffed from the file — and returns a `Dataset` with common syntax across sources (snapshots and halo catalogues today; trees and SHARK to follow, see DEVELOPMENT.md):
+`analysistools.load()` opens any supported data product with one call — kind and format sniffed from the file — and returns a `Dataset` with common syntax across sources (snapshots, halo catalogues, merger trees, and SHARK galaxy catalogues; see DEVELOPMENT.md):
 
 ```python
 import numpy as np
@@ -92,6 +93,17 @@ grid = GriddingTools().smooth_to_grid(parts["pos"][:, :2], parts["mass"],
                                       (512, 512), limits, method="CIC")
 prof = ProfileTools(numbins=40).volume_density(parts["pos"], parts["mass"],
                                                c, 0.05, 1.0)
+
+# merger trees: queries return TrackDataset (rows = snapshots)
+tree = at.load("VELOCIraptor.walkabletree.hdf5", halos=halos)
+tr = tree.from_halo(halos, index=0)
+tr["mass"], tr["redshift"], tr.infall()
+
+# SHARK galaxies: one file, or a SharkModel frozen at a redshift
+gals = at.load("199/0/galaxies.hdf5")             # kind sniffed
+gals["pos"], gals["mass"], gals.select(type=(0, 1))   # centrals
+z0 = shark_model.at(0.0)                          # EpochModel -> Dataset
+z0h = halo_model.at(0.0)                          # works for HaloModel too
 ```
 
 Everything is lazy (no I/O until first field access), metadata is uniform (`ds.meta["redshift"]`, `["boxsize"]`, `["h0"]`), and the underlying legacy object stays reachable via `ds.backend`. The existing APIs below are unchanged.
@@ -343,11 +355,11 @@ field.mass      # mc^2, eV
 
 ## SHARK Semi-Analytic Catalogues (`shark` package)
 
-The `shark` package (a sibling of `analysistools`; integration into it is planned — see DEVELOPMENT.md) provides lazy, cached access to SHARK galaxy catalogues, mirroring the `HaloModel` API so both can feed the same analysis and plotting code:
+The `shark` package now lives at `analysistools.shark` (the old top-level `import shark` still works via a deprecation shim). It provides lazy, cached access to SHARK galaxy catalogues, mirroring the `HaloModel` API so both can feed the same analysis and plotting code:
 
 ```python
-from shark.common import _redshift_table, parse_subvolumes
-from shark.model import SharkModel
+from analysistools.shark.common import _redshift_table, parse_subvolumes
+from analysistools.shark.model import SharkModel
 
 rt = _redshift_table("redshift_list.txt")
 sv = parse_subvolumes("0-63")
