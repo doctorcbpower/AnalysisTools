@@ -104,6 +104,20 @@ gals = at.load("199/0/galaxies.hdf5")             # kind sniffed
 gals["pos"], gals["mass"], gals.select(type=(0, 1))   # centrals
 z0 = shark_model.at(0.0)                          # EpochModel -> Dataset
 z0h = halo_model.at(0.0)                          # works for HaloModel too
+
+# Simulation: bind matched products, cross-match between them
+sim = at.Simulation(
+    snapshots={0.0: "snap_0031.hdf5"},
+    halos={0.0: "snap_0031.VELOCIraptor.properties.0"},
+    trees="VELOCIraptor.walkabletree.hdf5",
+    galaxies={0.0: "199/0/galaxies.hdf5"},
+    snapnums={0.0: 31}, label="CDM",
+)
+epoch = sim.at(0.0)                               # matched views, lazy
+parts = epoch.particles_in_halo(index=0, r_scale=2.0)
+gals  = epoch.galaxies_in_halo(index=0)           # position match (default)
+gals2 = epoch.galaxies_in_halo(hid, match_by="id")
+track = epoch.track_of(index=0)                   # catalogue auto-linked
 ```
 
 Everything is lazy (no I/O until first field access), metadata is uniform (`ds.meta["redshift"]`, `["boxsize"]`, `["h0"]`), and the underlying legacy object stays reachable via `ds.backend`. The existing APIs below are unchanged.
