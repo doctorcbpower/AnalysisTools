@@ -26,7 +26,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for the roadmap towards a unified interface
 | `analysistools/shark/` | SHARK semi-analytic catalogue tools: `SharkModel` (lazy reader), `Analysis`, `Plotter`, CLI, fsps-based photometry |
 | `shark/` | Deprecated import shim → `analysistools.shark` |
 | `data/` | Small example data: `snap_0031.hdf5`, VELOCIraptor walkable trees, `halos/` catalogues |
-| `notebooks/` | `PlotSimulationAnalysis.ipynb` — worked end-to-end example |
+| `notebooks/` | `UnifiedInterfaceDemo.ipynb` — executed end-to-end example of the unified interface (`PlotSimulationAnalysis.ipynb` is the legacy example) |
 
 ---
 
@@ -87,12 +87,13 @@ big = halos.select(mass=(1e12, None))
 c   = big["pos"][np.argmax(big["mass"])]
 parts = snap.dm.select(centre=c, size=2.0 * big["radius"].max())
 
-# selections feed straight into the existing engines
-from analysistools import GriddingTools, ProfileTools
-grid = GriddingTools().smooth_to_grid(parts["pos"][:, :2], parts["mass"],
-                                      (512, 512), limits, method="CIC")
-prof = ProfileTools(numbins=40).volume_density(parts["pos"], parts["mass"],
-                                               c, 0.05, 1.0)
+# dataset-aware plotting (GriddingTools/ProfileTools underneath)
+from analysistools.api import plotting as plt2
+ax = plt2.density_map(snap.dm, centre=c, size=5.0, method="CIC")
+plt2.overlay_points(ax, big, centre=c)            # halos on the map
+prof = plt2.profile(snap.dm, c, kind="density", rmin=0.05, rmax=1.0)
+plt2.plot_profile(prof)
+plt2.mass_function([halos])                       # halo or galaxy Datasets
 
 # merger trees: queries return TrackDataset (rows = snapshots)
 tree = at.load("VELOCIraptor.walkabletree.hdf5", halos=halos)
