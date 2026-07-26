@@ -18,85 +18,84 @@ from scipy.spatial import cKDTree
 
 from numba import njit
 
+
+# ---------------------------------------------------------------------------
+# Jitted assignment kernels. 2D and 3D are separate functions because numba
+# type-checks every branch against the actual grid dimensionality, so a
+# single kernel with an `if dim == 3` cannot compile for both.
+# ---------------------------------------------------------------------------
+
+@njit
+def _ngp_assign_2d(grid, coords, values, Nx, Ny):
+    for p in range(coords.shape[0]):
+        i = int(np.floor(coords[p, 0]))
+        j = int(np.floor(coords[p, 1]))
+        grid[i % Nx, j % Ny] += values[p]
+
+
+@njit
+def _ngp_assign_3d(grid, coords, values, Nx, Ny, Nz):
+    for p in range(coords.shape[0]):
+        i = int(np.floor(coords[p, 0]))
+        j = int(np.floor(coords[p, 1]))
+        k = int(np.floor(coords[p, 2]))
+        grid[i % Nx, j % Ny, k % Nz] += values[p]
+
+
+@njit
+def _cic_assign_2d(grid, coords, values, Nx, Ny):
+    for p in range(coords.shape[0]):
+        x, y = coords[p, 0], coords[p, 1]
+        i, j = int(np.floor(x)), int(np.floor(y))
+        fx, fy = x - i, y - j
+        grid[i % Nx, j % Ny] += values[p] * (1-fx)*(1-fy)
+        grid[(i+1) % Nx, j % Ny] += values[p] * fx*(1-fy)
+        grid[i % Nx, (j+1) % Ny] += values[p] * (1-fx)*fy
+        grid[(i+1) % Nx, (j+1) % Ny] += values[p] * fx*fy
+
+
+@njit
+def _cic_assign_3d(grid, coords, values, Nx, Ny, Nz):
+    for p in range(coords.shape[0]):
+        x, y, z = coords[p, 0], coords[p, 1], coords[p, 2]
+        i, j, k = int(np.floor(x)), int(np.floor(y)), int(np.floor(z))
+        fx, fy, fz = x - i, y - j, z - k
+
+        grid[i % Nx, j % Ny, k % Nz] += values[p] * (1-fx)*(1-fy)*(1-fz)
+        grid[(i+1) % Nx, j % Ny, k % Nz] += values[p] * fx*(1-fy)*(1-fz)
+        grid[i % Nx, (j+1) % Ny, k % Nz] += values[p] * (1-fx)*fy*(1-fz)
+        grid[i % Nx, j % Ny, (k+1) % Nz] += values[p] * (1-fx)*(1-fy)*fz
+        grid[(i+1) % Nx, j % Ny, (k+1) % Nz] += values[p] * fx*(1-fy)*fz
+        grid[i % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * (1-fx)*fy*fz
+        grid[(i+1) % Nx, (j+1) % Ny, k % Nz] += values[p] * fx*fy*(1-fz)
+        grid[(i+1) % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * fx*fy*fz
+
+
 class GriddingTools:
     def __init__(self):
         pass
 
     @staticmethod
-    @njit
     def ngp_assign(grid, coords, values, grid_size):
         """
-        Nearest-Grid-Point (NGP) assignment.
+        Nearest-Grid-Point (NGP) assignment (2D or 3D, periodic wrap).
         """
-        n_particles, dim = coords.shape
-        # Ensure grid_size elements are int64
-        grid_size = grid_size.astype(np.int64)
-
-        for p in range(n_particles):
-            idx = np.empty(dim, dtype=np.int64)
-            fx = np.empty(dim, dtype=np.float64)
-            
-            for d in range(dim):
-                x = coords[p, d]
-                i = int(np.floor(x))
-                idx[d] = i
-            
-            if dim == 3:
-                i, j, k = idx
-                grid[i, j, k] += values[p]
-            else:
-                # Implement 2D case if needed
-                raise NotImplementedError("Only 3D CIC implemented.")
+        gs = np.asarray(grid_size, dtype=np.int64)
+        if grid.ndim == 3:
+            _ngp_assign_3d(grid, coords, values, gs[0], gs[1], gs[2])
+        else:
+            _ngp_assign_2d(grid, coords, values, gs[0], gs[1])
 
     @staticmethod
-    @njit
     def cic_assign(grid, coords, values, grid_size):
         """
-        Cloud-In-Cell (CIC) assignment.
+        Cloud-In-Cell (CIC) assignment (2D or 3D, periodic wrap).
         """
-        n_particles, dim = coords.shape
-        # Ensure grid_size elements are int64
-        grid_size = grid_size.astype(np.int64)
-
-        for p in range(n_particles):
-            idx = np.empty(dim, dtype=np.int64)
-            fx = np.empty(dim, dtype=np.float64)
-            
-            for d in range(dim):
-                x = coords[p, d]
-                i = int(np.floor(x))
-                f = x - i
-                idx[d] = i
-                fx[d] = f
-            
-            if dim == 3:
-                i, j, k = idx
-                fx_i, fx_j, fx_k = fx
-                
-                # Compute weights
-                w000 = (1-fx_i)*(1-fx_j)*(1-fx_k)
-                w100 = fx_i*(1-fx_j)*(1-fx_k)
-                w010 = (1-fx_i)*fx_j*(1-fx_k)
-                w001 = (1-fx_i)*(1-fx_j)*fx_k
-                w101 = fx_i*(1-fx_j)*fx_k
-                w011 = (1-fx_i)*fx_j*fx_k
-                w110 = fx_i*fx_j*(1-fx_k)
-                w111 = fx_i*fx_j*fx_k
-                
-                # Periodic boundaries
-                Nx, Ny, Nz = grid_size
-                grid[i % Nx, j % Ny, k % Nz] += values[p] * w000
-                grid[(i+1) % Nx, j % Ny, k % Nz] += values[p] * w100
-                grid[i % Nx, (j+1) % Ny, k % Nz] += values[p] * w010
-                grid[i % Nx, j % Ny, (k+1) % Nz] += values[p] * w001
-                grid[(i+1) % Nx, j % Ny, (k+1) % Nz] += values[p] * w101
-                grid[i % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * w011
-                grid[(i+1) % Nx, (j+1) % Ny, k % Nz] += values[p] * w110
-                grid[(i+1) % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * w111
-
-            else:
-                # Implement 2D case if needed
-                raise NotImplementedError("Only 3D CIC implemented.")
+        gs = np.asarray(grid_size, dtype=np.int64)
+        if grid.ndim == 3:
+            _cic_assign_3d(grid, coords, values, gs[0], gs[1], gs[2])
+        else:
+            _cic_assign_2d(grid, coords, values, gs[0], gs[1])
 
 
     def smooth_to_grid(self, positions, values, grid_size, grid_limits,
@@ -118,6 +117,9 @@ class GriddingTools:
         """
         dim = len(grid_size)
         grid = np.zeros(grid_size, dtype=float)
+        # numba-jitted assigners need an ndarray (tuple indexing is
+        # branch-checked statically and fails for 2D input)
+        grid_size = np.asarray(grid_size, dtype=np.int64)
         # Grid spacing
         spacing = [(grid_limits[2*i+1] - grid_limits[2*i]) / grid_size[i] 
                    for i in range(dim)]
