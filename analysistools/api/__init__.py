@@ -21,11 +21,13 @@ from .trees import MergerTree, TrackDataset
 from .galaxies import GalaxyCatalogue
 from .epoch import EpochModel, EpochHaloView, at
 from .simulation import Simulation, Epoch, match_positions
+from . import plotting
 
 __all__ = ["load", "Dataset", "SnapshotDataset", "HaloCatalogue",
            "MergerTree", "TrackDataset", "GalaxyCatalogue",
            "EpochModel", "EpochHaloView", "at",
-           "Simulation", "Epoch", "match_positions", "FIELD_ALIASES"]
+           "Simulation", "Epoch", "match_positions", "plotting",
+           "FIELD_ALIASES"]
 
 #: kinds load() understands today; "field" (FDM) arrives in later work
 #: (see DEVELOPMENT.md section 5).
