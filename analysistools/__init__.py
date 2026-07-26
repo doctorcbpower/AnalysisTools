@@ -25,7 +25,8 @@ from .halo_model import HaloModel
 
 # --- unified interface (analysistools.api; see DEVELOPMENT.md) ---
 from . import api
-from .api import load, Dataset, SnapshotDataset, HaloCatalogue
+from .api import (load, Dataset, SnapshotDataset, HaloCatalogue,
+                  MergerTree, TrackDataset, GalaxyCatalogue, EpochModel)
 from .ic_tools import ICTools
 from .merger_tree_tools import MergerTreeTools
 from .gridding_tools import GriddingTools
@@ -58,6 +59,10 @@ __all__ = [
     "Dataset",
     "SnapshotDataset",
     "HaloCatalogue",
+    "MergerTree",
+    "TrackDataset",
+    "GalaxyCatalogue",
+    "EpochModel",
     # classes
     "SnapshotTools",
     "HaloTools",

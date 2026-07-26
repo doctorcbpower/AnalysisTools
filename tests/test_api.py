@@ -49,7 +49,7 @@ def test_load_missing_file_raises():
 
 def test_load_future_kind_raises_helpfully():
     with pytest.raises(NotImplementedError):
-        at.load(SNAP, kind="tree")
+        at.load(SNAP, kind="field")
 
 
 # ---------------------------------------------------------------------------

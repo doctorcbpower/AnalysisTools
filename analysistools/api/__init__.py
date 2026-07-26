@@ -17,13 +17,17 @@ from typing import Optional
 from .dataset import Dataset, FIELD_ALIASES
 from .snapshot import SnapshotDataset
 from .halos import HaloCatalogue
+from .trees import MergerTree, TrackDataset
+from .galaxies import GalaxyCatalogue
+from .epoch import EpochModel, EpochHaloView, at
 
 __all__ = ["load", "Dataset", "SnapshotDataset", "HaloCatalogue",
-           "FIELD_ALIASES"]
+           "MergerTree", "TrackDataset", "GalaxyCatalogue",
+           "EpochModel", "EpochHaloView", "at", "FIELD_ALIASES"]
 
-#: kinds load() understands today; "tree", "galaxies", "field" arrive in
-#: later phases (see DEVELOPMENT.md section 5).
-_SUPPORTED_KINDS = ("snapshot", "halos")
+#: kinds load() understands today; "field" (FDM) arrives in later work
+#: (see DEVELOPMENT.md section 5).
+_SUPPORTED_KINDS = ("snapshot", "halos", "tree", "galaxies")
 
 
 def _sniff_hdf5(path: str):
@@ -40,9 +44,19 @@ def _sniff_hdf5(path: str):
                 return "snapshot", "HDF5", "GADGET4"    # GADGET-4 / AREPO
             return "snapshot", "HDF5", "GADGET2/3"
 
-        # --- SHARK galaxies (Phase 2) ---
+        # --- SHARK galaxies ---
         if "galaxies" in keys:
             return "galaxies", "SHARK", None
+
+        # --- merger trees ---
+        if "Snapshots" in keys and "Header" in keys:
+            return "tree", "TreeFrog", None          # walkable flavour
+        if "TreeHalos" in keys and "TreeTimes" in keys:
+            return "tree", "SubFind", None           # GADGET-4 SubFind-HBT
+        if any(k.startswith("Snap_") for k in keys):
+            snap_groups = [k for k in keys if k.startswith("Snap_")]
+            if snap_groups and "Progenitor" in f[snap_groups[0]]:
+                return "tree", "TreeFrog", None      # full flavour
 
         # --- SubFind group catalogue ---
         if "Group" in keys or "Subhalo" in keys:
@@ -128,9 +142,13 @@ def load(path: str, kind: Optional[str] = None,
                              "catalogues that cannot be sniffed.")
         return HaloCatalogue(path, fileformat=fileformat, label=label,
                              **kwargs)
-    if kind in ("tree", "galaxies", "field"):
+    if kind == "tree":
+        return MergerTree(path, fileformat=fileformat or "TreeFrog",
+                          label=label, **kwargs)
+    if kind == "galaxies":
+        return GalaxyCatalogue(path, label=label, **kwargs)
+    if kind == "field":
         raise NotImplementedError(
-            f"kind='{kind}' is planned for a later phase (see "
-            f"DEVELOPMENT.md section 5); use the existing "
-            f"MergerTreeTools / SharkModel / FDMFieldTools APIs meanwhile.")
+            "kind='field' (FDM mesh data) is planned for future work (see "
+            "DEVELOPMENT.md section 7.5); use FDMFieldTools meanwhile.")
     raise ValueError(f"Unknown kind '{kind}' (use one of {_SUPPORTED_KINDS}).")

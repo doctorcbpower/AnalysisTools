@@ -66,9 +66,28 @@ FIELD_ALIASES: Dict[str, Dict[str, Union[Sequence[str], Callable]]] = {
         "host_id":  ("HostID",),
     },
     "galaxies": {
-        # populated by the Phase-2 GalaxyCatalogue adapter (SHARK):
-        # pos <- stacked position_x/y/z, mass <- mstars_disk + mstars_bulge,
-        # id <- id_galaxy, sfr <- sfr_disk + sfr_bulge, type <- type, ...
+        # SHARK catalogues. Callables build derived/stacked fields from
+        # native columns via ds._resolve() (see note in Dataset._resolve).
+        "pos": lambda ds: np.stack([ds._resolve("position_x"),
+                                    ds._resolve("position_y"),
+                                    ds._resolve("position_z")], axis=1),
+        "vel": lambda ds: np.stack([ds._resolve("velocity_x"),
+                                    ds._resolve("velocity_y"),
+                                    ds._resolve("velocity_z")], axis=1),
+        "mass": lambda ds: (ds._resolve("mstars_disk")
+                            + ds._resolve("mstars_bulge")),
+        "mstar": lambda ds: (ds._resolve("mstars_disk")
+                             + ds._resolve("mstars_bulge")),
+        "mgas": lambda ds: (ds._resolve("mgas_disk")
+                            + ds._resolve("mgas_bulge")),
+        "sfr": lambda ds: (ds._resolve("sfr_disk")
+                           + ds._resolve("sfr_burst")),
+        "id": ("id_galaxy",),
+        "type": ("type",),
+        "mhalo": ("mvir_hosthalo",),
+        "msubhalo": ("mvir_subhalo",),
+        "mbh": ("m_bh", "mbh"),
+        "radius": ("rstar_disk",),
     },
 }
 
@@ -123,6 +142,12 @@ class Dataset:
     # Field access
     # ------------------------------------------------------------------
 
+    def _fetch_native(self, field: str) -> Optional[np.ndarray]:
+        """Hook for adapters with an on-demand backend (e.g. a SharkModel):
+        fetch one native column by name, or return None if unavailable.
+        Fetched columns are cached in self._columns."""
+        return None
+
     def _resolve(self, field: str) -> np.ndarray:
         self._ensure_loaded()
         if field in self._columns:
@@ -130,10 +155,20 @@ class Dataset:
         alias = FIELD_ALIASES.get(self.kind, {}).get(field)
         if alias is not None:
             if callable(alias):
+                # NOTE: callables must build from ds._resolve() (unindexed
+                # arrays); __getitem__ applies any view index afterwards.
                 return alias(self)
             for native in alias:
                 if native in self._columns:
                     return self._columns[native]
+        # on-demand backend fetch (field itself, then its aliases)
+        candidates = [field] + (list(alias) if alias is not None
+                                and not callable(alias) else [])
+        for native in candidates:
+            arr = self._fetch_native(native)
+            if arr is not None:
+                self._columns[native] = arr
+                return arr
         raise KeyError(
             f"'{field}' not found in this {self.kind} dataset. "
             f"Native columns: {sorted(self._columns)}")
