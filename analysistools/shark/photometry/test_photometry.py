@@ -22,10 +22,10 @@ import h5py
 # Allow running from shark/photometry/ directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from shark.common import _redshift_table, parse_subvolumes
-from shark.model import SharkModel
-from shark.photometry.io import galaxy_data, sfh_ages_from_model
-from shark.photometry.sps import SPSEngine, _combine_mags
+from analysistools.shark.common import _redshift_table, parse_subvolumes
+from analysistools.shark.model import SharkModel
+from analysistools.shark.photometry.io import galaxy_data, sfh_ages_from_model
+from analysistools.shark.photometry.sps import SPSEngine, _combine_mags
 
 
 # ------------------------------------------------------------------
@@ -226,7 +226,7 @@ def test_pipeline(model):
         print("  SKIP (python-fsps not installed)")
         return
 
-    from shark.photometry import PhotometryPipeline
+    from analysistools.shark.photometry import PhotometryPipeline
 
     pipe = PhotometryPipeline(model, z_obs=0.0, bands=["v"], progress=False)
     print(f"  n_galaxies = {pipe.n_galaxies}")

@@ -19,6 +19,12 @@ class GalaxyTools:
             galfilename - path of the galaxy catalogue
     '''
     def __init__(self,galfilename,galfileformat,**kwargs):
+        import warnings
+        warnings.warn(
+            "GalaxyTools is deprecated: use analysistools.shark.model."
+            "SharkModel or the GalaxyCatalogue adapter "
+            "(analysistools.load(..., kind='galaxies')) instead.",
+            DeprecationWarning, stacklevel=2)
         self.galfilename=galfilename
         self.galfileformat=galfileformat
 

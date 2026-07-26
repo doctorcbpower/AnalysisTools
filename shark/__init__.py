@@ -1,80 +1,38 @@
 """
-shark — Analysis package for SHARK galaxy formation model output.
+Deprecated import shim: the shark package now lives inside analysistools.
 
-Public API
-----------
-SharkModel
-    Lazy, cached access to a single SHARK model run's HDF5 catalogues.
+    import shark                    ->  from analysistools import shark
+    from shark.model import ...     ->  from analysistools.shark.model import ...
 
-Analysis
-    Computes binned statistics (mass functions, scaling relations) from
-    one or more SharkModel instances.
-
-Plotter
-    Renders Analysis result dicts to publication-quality matplotlib figures.
-
-Quick-start
------------
->>> from common import _redshift_table, parse_subvolumes
->>> from shark import SharkModel, Analysis, Plotter
->>> import numpy as np
-
->>> rt  = _redshift_table("redshift_list.txt")
->>> sv  = parse_subvolumes("0-63")
->>> z   = np.array([0.0, 1.0, 2.0])
-
->>> models = [
-...     SharkModel("./CDM/base_model", rt, sv, label="CDM", colour="#e41a1c"),
-...     SharkModel("./WDM/base_model", rt, sv, label="WDM", colour="#377eb8"),
-... ]
-
->>> analysis = Analysis(models)
->>> plotter  = Plotter("./plots")
-
->>> plotter.plot_halo_mf(   analysis.compute_halo_mf(z))
->>> plotter.plot_stellar_mf(analysis.compute_stellar_mf(z))
->>> plotter.plot_sfr_main_sequence(analysis.compute_sfr_main_sequence(z))
->>> plotter.plot_size_mass( analysis.compute_size_mass(z))
->>> plotter.plot_bh_bulge(  analysis.compute_bh_bulge(z))
-
-# Custom relation — cold gas fraction vs stellar mass
->>> results = analysis.compute_custom(
-...     redshifts=[0.0],
-...     x_func=lambda m, z: m.mstars(z),
-...     y_func=lambda m, z: m.mgas(z) / (m.mstars(z) + m.mgas(z)),
-...     sel_func=lambda m, z: m.mstars(z) > 1e8,
-...     x_log=True,
-...     y_log=False,
-... )
->>> plotter.plot_custom(results, axis_cfg=dict(
-...     xtit=r"$\\log_{10}(M_\\star/M_\\odot)$",
-...     ytit=r"$f_{\\rm gas}$",
-...     ymin=0, ymax=1,
-... ))
-
-CLI
----
-python -m shark.cli \\
-    -z redshift_list.txt -v '0-63' -o ./plots \\
-    --model-dirs ./CDM/base_model ./WDM/base_model \\
-    --redshifts 0 1 2 --labels CDM WDM \\
-    --plots halo_mf stellar_mf
+Existing imports keep working through this shim (with a DeprecationWarning);
+new code should import analysistools.shark directly.
 """
+import importlib
+import sys
+import warnings
 
-from .model    import SharkModel, GALAXY_FIELDS
-from .analysis import Analysis, make_bins, number_density
-from .plots    import Plotter, DEFAULT_COLOURS
+warnings.warn(
+    "'import shark' is deprecated: the package has moved to "
+    "'analysistools.shark'. This top-level shim will be removed in a "
+    "future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-__all__ = [
-    # Core classes
-    "SharkModel",
-    "Analysis",
-    "Plotter",
-    # Field catalogue
-    "GALAXY_FIELDS",
-    # Analysis utilities
-    "make_bins",
-    "number_density",
-    # Plot utilities
-    "DEFAULT_COLOURS",
-]
+_pkg = importlib.import_module("analysistools.shark")
+
+# Alias every submodule under its old name so that `shark.model` and
+# `analysistools.shark.model` are the *same* module object (identity of
+# classes/exceptions preserved). Modules with heavy optional dependencies
+# (e.g. photometry -> fsps) are skipped if they fail to import.
+for _sub in ("common", "model", "analysis", "plots", "cli",
+             "photometry", "photometry.io", "photometry.sps",
+             "photometry.cosmology", "photometry.photometry"):
+    try:
+        sys.modules[f"{__name__}.{_sub}"] = importlib.import_module(
+            f"analysistools.shark.{_sub}")
+    except ImportError:
+        pass
+
+# Finally alias the package itself.
+sys.modules[__name__] = _pkg
