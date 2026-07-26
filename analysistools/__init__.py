@@ -16,10 +16,16 @@ from . import treeio_ahf
 from . import profile_tools
 from . import gridding_tools
 from . import fdm_field_tools
+from . import halo_model
 
 # --- public class imports ---
 from .snapshot_tools import SnapshotTools
 from .halo_tools import HaloTools
+from .halo_model import HaloModel
+
+# --- unified interface (analysistools.api; see DEVELOPMENT.md) ---
+from . import api
+from .api import load, Dataset, SnapshotDataset, HaloCatalogue
 from .ic_tools import ICTools
 from .merger_tree_tools import MergerTreeTools
 from .gridding_tools import GriddingTools
@@ -28,7 +34,6 @@ from .fdm_field_tools import FDMFieldTools
 
 __all__ = [
     # submodules
-    "analysis_tools",
     "snapshot_tools",
     "snapio_hdf5",
     "snapio_binary",
@@ -46,9 +51,17 @@ __all__ = [
     "profile_tools",
     "gridding_tools",
     "fdm_field_tools",
+    "halo_model",
+    "api",
+    # unified interface
+    "load",
+    "Dataset",
+    "SnapshotDataset",
+    "HaloCatalogue",
     # classes
     "SnapshotTools",
-    "HaloCatalogue",
+    "HaloTools",
+    "HaloModel",
     "ICTools",
     "MergerTreeTools",
     "GriddingTools",
