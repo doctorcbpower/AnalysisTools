@@ -12,6 +12,20 @@ It provides tools to:
 - Compute radial/vertical density and kinematic profiles
 - Read FDM (fuzzy dark matter) wavefunction field snapshots
 - Provide lazy, cached, multi-snapshot access to halo catalogues across redshift (`HaloModel`)
+- Read and analyse SHARK semi-analytic galaxy catalogues, including star formation histories and fsps-based photometry (`shark` package)
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the roadmap towards a unified interface across all data sources.
+
+---
+
+## Repository Layout
+
+| Path | Contents |
+|------|----------|
+| `analysistools/` | Core package: snapshot, halo catalogue, merger tree, profile, gridding, FDM tools |
+| `shark/` | SHARK semi-analytic catalogue tools: `SharkModel` (lazy reader), `Analysis`, `Plotter`, CLI, fsps-based photometry |
+| `data/` | Small example data: `snap_0031.hdf5`, VELOCIraptor walkable trees, `halos/` catalogues |
+| `notebooks/` | `PlotSimulationAnalysis.ipynb` — worked end-to-end example |
 
 ---
 
@@ -45,6 +59,42 @@ The package is imported as `analysistools`; submodules use relative imports (e.g
 | `treeio_subfind.py`, `treeio_treefrog.py`, `treeio_ahf.py` | `read_subfind_hbt`/`walk_subfind`, `read_treefrog`/`walk_treefrog`, `read_ahf_mergertree`/`walk_ahf` | Format-specific merger tree readers and main-branch walkers |
 | `merger_tree_types.py` | `HaloTrack`, `OrbitAnalysis`, `MergerTreeError`, `periodic_delta` | Shared, format-agnostic containers used by `MergerTreeTools` |
 | `fdm_field_tools.py` | `FDMFieldTools` | Read FDM wavefunction field snapshots (mesh data, not particles); density, radial profile, slices |
+| `galaxy_tools.py` | `GalaxyTools` | Legacy SHARK catalogue reader — superseded by `shark.model.SharkModel` (see below) |
+
+---
+
+## Unified Interface (new)
+
+`analysistools.load()` opens any supported data product with one call — kind and format sniffed from the file — and returns a `Dataset` with common syntax across sources (snapshots and halo catalogues today; trees and SHARK to follow, see DEVELOPMENT.md):
+
+```python
+import numpy as np
+import analysistools as at
+
+snap  = at.load("snap_0031.hdf5")                      # SWIFT/GADGET sniffed
+halos = at.load("snap_0031.VELOCIraptor.properties.0") # VELOCIraptor sniffed
+
+# same field vocabulary everywhere: pos, vel, mass, id, radius, ...
+halos["mass"], halos["pos"], snap["pos"]
+
+# per-species views (snapshots)
+snap.dm["pos"]          # or snap.dm.pos — both work
+snap.gas, snap.star, snap.bh
+
+# chainable selections: geometric and attribute cuts
+big = halos.select(mass=(1e12, None))
+c   = big["pos"][np.argmax(big["mass"])]
+parts = snap.dm.select(centre=c, size=2.0 * big["radius"].max())
+
+# selections feed straight into the existing engines
+from analysistools import GriddingTools, ProfileTools
+grid = GriddingTools().smooth_to_grid(parts["pos"][:, :2], parts["mass"],
+                                      (512, 512), limits, method="CIC")
+prof = ProfileTools(numbins=40).volume_density(parts["pos"], parts["mass"],
+                                               c, 0.05, 1.0)
+```
+
+Everything is lazy (no I/O until first field access), metadata is uniform (`ds.meta["redshift"]`, `["boxsize"]`, `["h0"]`), and the underlying legacy object stays reachable via `ds.backend`. The existing APIs below are unchanged.
 
 ---
 
@@ -291,6 +341,49 @@ field.mass      # mc^2, eV
 
 ---
 
+## SHARK Semi-Analytic Catalogues (`shark` package)
+
+The `shark` package (a sibling of `analysistools`; integration into it is planned — see DEVELOPMENT.md) provides lazy, cached access to SHARK galaxy catalogues, mirroring the `HaloModel` API so both can feed the same analysis and plotting code:
+
+```python
+from shark.common import _redshift_table, parse_subvolumes
+from shark.model import SharkModel
+
+rt = _redshift_table("redshift_list.txt")
+sv = parse_subvolumes("0-63")
+
+m = SharkModel("./CDM/base_model", rt, sv, label="CDM")
+
+mstar = m.mstars(redshift=0.0)          # mstars_disk + mstars_bulge
+sfr   = m.sfr(redshift=0.0)
+raw   = m.get("mvir_hosthalo", redshift=0.0)   # any native field by name
+```
+
+Available accessors include `mstars`, `mgas`, `sfr`, `ssfr`, `rstar`, `mhalo`, `msubhalo`, `mbh`, `mbulge`, `galaxy_type`, `h0`, `volume`, `age_at_z`, plus star formation history access (`sfh_disk`, `sfh_bulge`, `Z_disk_history`, ...).
+
+Higher-level components:
+
+| Module | Purpose |
+|--------|---------|
+| `shark.analysis` | `Analysis`: halo/stellar mass functions, SFR main sequence, size–mass, BH–bulge relations |
+| `shark.plots` | `Plotter`: standard comparison plots over one or more `SharkModel`s |
+| `shark.cli` | Command-line driver |
+| `shark.photometry` | fsps-based luminosities/magnitudes from metallicities and star formation histories |
+
+---
+
+## Merger Tree Formats
+
+| `treefileformat` | Tree builder | Reader/walker |
+|------------------|--------------|---------------|
+| `"SubFind"` | SubFind-HBT (GADGET-4) | `treeio_subfind` |
+| `"TreeFrog"` | TreeFrog / VELOCIraptor | `treeio_treefrog` |
+| `"MergerTree"` | AHF MergerTree | `treeio_ahf` |
+
+All return format-agnostic `HaloTrack` objects (`merger_tree_types`), so downstream analysis (`find_infall`, `analyse_orbit`) and plotting are format-independent.
+
+---
+
 ## Supported Data Blocks (Snapshots)
 
 | Block key | Description |
@@ -348,7 +441,7 @@ Supported `fileformat` values for `read_catalogue`: `"SUBFIND"`, `"AHF"`, `"VELO
 
 ## Status
 
-Active development. The core snapshot tools are stable; halo catalogue, merger tree, profile, gridding, and FDM field tooling are evolving alongside ongoing research use.
+Active development. The core snapshot tools are stable; halo catalogue, merger tree, profile, gridding, FDM field, and SHARK tooling are evolving alongside ongoing research use. A unified `Dataset`/`Simulation` interface across all data sources is planned — design and roadmap in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
