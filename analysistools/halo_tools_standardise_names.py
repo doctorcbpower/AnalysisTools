@@ -129,8 +129,10 @@ def standardise_catalogue_names(halos: Dict[str, np.ndarray],
     if halos is None:
         raise ValueError("No halo data provided for normalisation.")
 
+    # Case-insensitive halotype lookup ("VELOCIraptor" == "VELOCIRAPTOR")
     halotype = halotype.upper()
-    mapping = CATALOGUE_MAPPINGS.get((halotype, object_type))
+    _by_upper = {(ht.upper(), ot): m for (ht, ot), m in CATALOGUE_MAPPINGS.items()}
+    mapping = _by_upper.get((halotype, object_type))
     if mapping is None:
         raise ValueError(
             f"No normalisation mapping defined for ({halotype}, {object_type}). "
@@ -160,17 +162,30 @@ def standardise_catalogue_names(halos: Dict[str, np.ndarray],
         elif nativekey in halos:
             standardised[stdkey] = halos[nativekey]
         else:
-            if logger:
+            # Don't warn for pos/vel when per-component columns are present:
+            # the stacking block below will assemble them.
+            stackable = (
+                (stdkey == "pos" and all(k in halos for k in ("Xc", "Yc", "Zc")))
+                or (stdkey == "vel" and (
+                    all(k in halos for k in ("Vx", "Vy", "Vz"))
+                    or all(k in halos for k in ("VXc", "VYc", "VZc")))))
+            if logger and not stackable:
                 logger.warning(f"Missing field '{nativekey}' for {halotype} ({object_type})")
             standardised[stdkey] = None
 
-    # Optional: convert units or reformat arrays
-    if halotype == "AHF":
-        # Example: assemble coordinates if stored separately
-        if "Xc" in halos and "Yc" in halos and "Zc" in halos:
-            standardised["pos"] = np.vstack((halos["Xc"], halos["Yc"], halos["Zc"])).T
-        if "Vx" in halos and "Vy" in halos and "Vz" in halos:
-            standardised["vel"] = np.vstack((halos["Vx"], halos["Vy"], halos["Vz"])).T
+    # Assemble (N, 3) pos/vel from per-component columns where the mapped
+    # field is absent or 1-D. Covers AHF (Xc/Yc/Zc, Vx/Vy/Vz) and flat
+    # VELOCIraptor .properties files (Xc/Yc/Zc, VXc/VYc/VZc).
+    def _needs_stacking(key):
+        arr = standardised.get(key)
+        return arr is None or (hasattr(arr, "ndim") and arr.ndim == 1)
+
+    if _needs_stacking("pos") and all(k in halos for k in ("Xc", "Yc", "Zc")):
+        standardised["pos"] = np.vstack((halos["Xc"], halos["Yc"], halos["Zc"])).T
+    for vx, vy, vz in (("Vx", "Vy", "Vz"), ("VXc", "VYc", "VZc")):
+        if _needs_stacking("vel") and all(k in halos for k in (vx, vy, vz)):
+            standardised["vel"] = np.vstack((halos[vx], halos[vy], halos[vz])).T
+            break
 
     # Example unit scaling (to comoving Mpc/h, km/s)
     # You can extend this to detect internal units from metadata

@@ -112,7 +112,11 @@ class HaloTools:
         
         self.filename = filename
         self.snapnum = snapnum
-        self.halocatfileformat = self.fmtmap.get(str(fileformat).upper(), str(fileformat).upper())
+        # Normalise: integer codes via fmtmap, then case-insensitive match
+        # against FORMAT_READERS keys (so "VELOCIraptor"/"velociraptor"/3 all work).
+        fmt = self.fmtmap.get(fileformat, self.fmtmap.get(str(fileformat), str(fileformat)))
+        canonical = {k.upper(): k for k in FORMAT_READERS}
+        self.halocatfileformat = canonical.get(str(fmt).upper(), str(fmt).upper())
         if self.halocatfileformat not in FORMAT_READERS:
             raise ValueError(f"Unsupported halo catalogue format: {fileformat}")
 
