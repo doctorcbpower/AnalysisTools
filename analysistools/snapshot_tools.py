@@ -14,10 +14,198 @@ import numpy as np
 import os
 import logging
 from typing import Union, List, Optional, Dict, Any
+from dataclasses import dataclass
 
 from .snapio_hdf5 import read_hdf5, write_hdf5
 from .snapio_binary import read_binary
 
+@dataclass
+class SnapshotData:
+    """
+    Returns
+    -------
+    SnapshotData
+    Independent snapshot containing all particle data and metadata.
+    """
+    def __repr__(self):
+
+        npart = getattr(self, "num_part_total", None)
+
+        if npart is None:
+            return "<SnapshotData>"
+
+        return (
+            f"<SnapshotData "
+            f"z={getattr(self,'redshift','?')} "
+            f"N={int(np.sum(npart))}>"
+        )
+
+    def ParticleOffsetsByType(self,NumPartByType):
+        """
+        Return offsets of particle species by type
+        """
+        return np.concatenate([[0],np.cumsum(NumPartByType)],dtype=np.int64)
+    
+    def LoadParticlesByType(self, part_type: str = 'all'):
+        """
+        Load particles into separate objects by type.
+        
+        Parameters
+        ----------
+        part_type : str
+            Which particle types to load. Options: 'all', 'gas', 'star', 'dm', 'bh'
+        """
+        if not hasattr(self, 'pos') or not hasattr(self, 'num_part_total'):
+            raise RuntimeError("No data loaded. Call read() first.")
+        
+        # Calculate offsets for each particle type
+        offsets = self._calculate_particle_offsets()
+        
+        # Determine which types to load
+        load_flags = self._determine_load_flags(part_type, offsets)
+        
+        # Initialize potential array if needed
+        if not hasattr(self, 'potential') or self.potential is None:
+            self.potential = np.zeros(shape=(np.sum(self.num_part_total)), dtype=np.float32)
+        
+        # Load particle data for each requested type
+        if load_flags['gas']:
+            print('gas',offsets['gas'])
+            self.gas = self._create_particle_object('gas', offsets)
+        
+        if load_flags['dm']:
+            print('dm',offsets['dm'])
+            self.dm = self._create_particle_object('dm', offsets)
+        
+        if load_flags['star']:
+            print('star',offsets['star'])
+            self.star = self._create_particle_object('star', offsets)
+        
+        if load_flags['bh']:
+            print('bh',offsets['bh'])
+            self.bh = self._create_particle_object('bh', offsets)
+    
+    def _calculate_particle_offsets(self):
+        """Calculate start/end offsets for each particle type."""
+        offsets = {}
+        
+        offsets['gas'] = {
+            'start': np.sum(self.num_part_total[:self.gas_type]),
+            'end': np.sum(self.num_part_total[:self.gas_type + 1])
+        }
+        offsets['dm'] = {
+            'start': np.sum(self.num_part_total[:self.dm_type]),
+            'end': np.sum(self.num_part_total[:self.dm_type + 1])
+        }
+        offsets['star'] = {
+            'start': np.sum(self.num_part_total[:self.star_type]),
+            'end': np.sum(self.num_part_total[:self.star_type + 1])
+        }
+        offsets['bh'] = {
+            'start': np.sum(self.num_part_total[:self.bh_type]),
+            'end': np.sum(self.num_part_total[:self.bh_type + 1])
+        }
+        
+        return offsets
+    
+    def _determine_load_flags(self, part_type: str, offsets: Dict):
+        """Determine which particle types should be loaded."""
+        load_flags = {'gas': False, 'dm': False, 'star': False, 'bh': False}
+        
+        if part_type == 'all':
+            for ptype in ['gas', 'star', 'bh', 'dm']:
+                if offsets[ptype]['end'] - offsets[ptype]['start'] > 0:
+                    load_flags[ptype] = True
+        elif part_type in load_flags:
+            if offsets[part_type]['end'] - offsets[part_type]['start'] > 0:
+                load_flags[part_type] = True
+        else:
+            raise ValueError(f"Unknown particle type: {part_type}")
+        
+        return load_flags
+    
+    def _create_particle_object(self, ptype: str, offsets: Dict):
+        """Create a ParticleProperties object for the specified type."""
+        start, end = offsets[ptype]['start'], offsets[ptype]['end']
+        
+        kwargs = {}
+        if ptype == 'gas':
+            if hasattr(self, 'u'):
+                kwargs['internal_energy'] = self.u[start:end]
+            if hasattr(self, 'rho'):
+                kwargs['density'] = self.rho[start:end]
+        
+        if hasattr(self, 'groupid'):
+            kwargs['groupid'] = self.groupid[start:end]
+        
+        return self.ParticleProperties(
+            self.pos[start:end],
+            self.vel[start:end],
+            self.pids[start:end],
+            self.mass[start:end],
+            self.potential[start:end],
+            **kwargs
+        )
+    
+    class ParticleProperties:
+        """Container for particle data of a specific type."""
+        
+        def __init__(self, pos, vel, pids, mass, potential, **kwargs):
+            self.pos = pos
+            self.vel = vel
+            self.pids = pids
+            self.mass = mass
+            self.potential = potential
+            
+            # Optional gas-specific properties
+            if 'internal_energy' in kwargs:
+                self.internal_energy = kwargs['internal_energy']
+            if 'density' in kwargs:
+                self.density = kwargs['density']
+            if 'groupid' in kwargs:
+                self.groupid = kwargs['groupid']
+    
+    def UnitConversion(self, **kwargs):
+        """
+        Apply unit conversions to the data.
+        
+        Parameters
+        ----------
+        convert_to_physical : bool, optional
+            Convert from comoving to physical coordinates
+        convert_to_comoving : bool, optional
+            Convert from physical to comoving coordinates
+        convert_to_per_littleh : bool, optional
+            Convert to units per little h
+        convert_to_littleh : bool, optional
+            Convert from units per little h
+        """
+        if not hasattr(self, 'pos') or not hasattr(self, 'scale_factor'):
+            raise RuntimeError("No data loaded or missing cosmological parameters")
+        
+        if kwargs.get('convert_to_physical'):
+            self.pos *= self.ScaleFactor
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize *= self.ScaleFactor
+        
+        if kwargs.get('convert_to_comoving'):
+            self.pos /= self.ScaleFactor
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize /= self.ScaleFactor
+        
+        if kwargs.get('convert_to_per_littleh'):
+            self.pos *= self.HubbleParam
+            if hasattr(self, 'mass'):
+                self.mass *= self.HubbleParam
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize *= self.HubbleParam
+        
+        if kwargs.get('convert_to_littleh'):
+            self.pos /= self.HubbleParam
+            if hasattr(self, 'mass'):
+                self.mass /= self.HubbleParam
+            if hasattr(self, 'BoxSize'):
+                self.BoxSize /= self.HubbleParam    
 class SnapshotTools:
     """
     Handle cosmological simulation snapshots (HDF5 or GADGET binary).
@@ -356,24 +544,39 @@ class SnapshotTools:
                 reader = read_hdf5()
                 self._transfer_attributes_to_reader(reader)
                 reader.read_hdf5_snapshot(snapfilename=self.snapfilename,convention=self.convention)
-                self._transfer_attributes_from_reader(reader)
             else:
                 reader = read_binary()
                 self._transfer_attributes_to_reader(reader)
                 reader.read_binary_snapshot()
-                self._transfer_attributes_from_reader(reader)
                 
         except Exception as e:
             logging.error(f"Error reading snapshot {self.snapfilename}: {e}")
             raise
+            
+        data = SnapshotData()
 
-        self._ensure_ptype()
+        for attr_name in dir(reader):
+            if attr_name.startswith("_"):
+                continue
+            value = getattr(reader, attr_name)
+            if callable(value):
+                continue
+            if isinstance(value, np.ndarray):
+                value = value.copy()
+            setattr(data, attr_name, value)
+        # reconstruct ptype if needed
+        if not hasattr(data, "ptype") or data.ptype is None:
+            data.ptype = np.concatenate([
+                np.full(int(n), t, dtype=np.int32)
+                for t, n in enumerate(data.num_part_total)
+            ])
 
-        return self
-        
+        return data
+
     def write_snapshot(
         self,
         filename: str,
+        data=None,
         idx: Optional[np.ndarray] = None,
         idx_type: Optional[np.ndarray] = None,
         file_format: str = "hdf5",
@@ -403,6 +606,9 @@ class SnapshotTools:
             Optional metadata: halo_centre, halo_systemic_velocity,
             halo_extent, run_label, etc.
         """
+        if data is None:
+            data = self
+            
         if not hasattr(self, 'pos') or self.pos is None:
             raise RuntimeError("No data loaded — call read_snapshot() first.")
 
@@ -446,172 +652,7 @@ class SnapshotTools:
         else:
             raise ValueError(f"Unsupported snapshot format: {file_format}")
 
-    def ParticleOffsetsByType(self,NumPartByType):
-        """
-        Return offsets of particle species by type
-        """
-        return np.concatenate([[0],np.cumsum(NumPartByType)],dtype=np.int64)
-    
-    def LoadParticlesByType(self, part_type: str = 'all'):
-        """
-        Load particles into separate objects by type.
-        
-        Parameters
-        ----------
-        part_type : str
-            Which particle types to load. Options: 'all', 'gas', 'star', 'dm', 'bh'
-        """
-        if not hasattr(self, 'pos') or not hasattr(self, 'num_part_total'):
-            raise RuntimeError("No data loaded. Call read() first.")
-        
-        # Calculate offsets for each particle type
-        offsets = self._calculate_particle_offsets()
-        
-        # Determine which types to load
-        load_flags = self._determine_load_flags(part_type, offsets)
-        
-        # Initialize potential array if needed
-        if not hasattr(self, 'potential') or self.potential is None:
-            self.potential = np.zeros(shape=(np.sum(self.num_part_total)), dtype=np.float32)
-        
-        # Load particle data for each requested type
-        if load_flags['gas']:
-            print('gas',offsets['gas'])
-            self.gas = self._create_particle_object('gas', offsets)
-        
-        if load_flags['dm']:
-            print('dm',offsets['dm'])
-            self.dm = self._create_particle_object('dm', offsets)
-        
-        if load_flags['star']:
-            print('star',offsets['star'])
-            self.star = self._create_particle_object('star', offsets)
-        
-        if load_flags['bh']:
-            print('bh',offsets['bh'])
-            self.bh = self._create_particle_object('bh', offsets)
-    
-    def _calculate_particle_offsets(self):
-        """Calculate start/end offsets for each particle type."""
-        offsets = {}
-        
-        offsets['gas'] = {
-            'start': np.sum(self.num_part_total[:self.gas_type]),
-            'end': np.sum(self.num_part_total[:self.gas_type + 1])
-        }
-        offsets['dm'] = {
-            'start': np.sum(self.num_part_total[:self.dm_type]),
-            'end': np.sum(self.num_part_total[:self.dm_type + 1])
-        }
-        offsets['star'] = {
-            'start': np.sum(self.num_part_total[:self.star_type]),
-            'end': np.sum(self.num_part_total[:self.star_type + 1])
-        }
-        offsets['bh'] = {
-            'start': np.sum(self.num_part_total[:self.bh_type]),
-            'end': np.sum(self.num_part_total[:self.bh_type + 1])
-        }
-        
-        return offsets
-    
-    def _determine_load_flags(self, part_type: str, offsets: Dict):
-        """Determine which particle types should be loaded."""
-        load_flags = {'gas': False, 'dm': False, 'star': False, 'bh': False}
-        
-        if part_type == 'all':
-            for ptype in ['gas', 'star', 'bh', 'dm']:
-                if offsets[ptype]['end'] - offsets[ptype]['start'] > 0:
-                    load_flags[ptype] = True
-        elif part_type in load_flags:
-            if offsets[part_type]['end'] - offsets[part_type]['start'] > 0:
-                load_flags[part_type] = True
-        else:
-            raise ValueError(f"Unknown particle type: {part_type}")
-        
-        return load_flags
-    
-    def _create_particle_object(self, ptype: str, offsets: Dict):
-        """Create a ParticleProperties object for the specified type."""
-        start, end = offsets[ptype]['start'], offsets[ptype]['end']
-        
-        kwargs = {}
-        if ptype == 'gas':
-            if hasattr(self, 'u'):
-                kwargs['internal_energy'] = self.u[start:end]
-            if hasattr(self, 'rho'):
-                kwargs['density'] = self.rho[start:end]
-        
-        if hasattr(self, 'groupid'):
-            kwargs['groupid'] = self.groupid[start:end]
-        
-        return self.ParticleProperties(
-            self.pos[start:end],
-            self.vel[start:end],
-            self.pids[start:end],
-            self.mass[start:end],
-            self.potential[start:end],
-            **kwargs
-        )
-    
-    class ParticleProperties:
-        """Container for particle data of a specific type."""
-        
-        def __init__(self, pos, vel, pids, mass, potential, **kwargs):
-            self.pos = pos
-            self.vel = vel
-            self.pids = pids
-            self.mass = mass
-            self.potential = potential
-            
-            # Optional gas-specific properties
-            if 'internal_energy' in kwargs:
-                self.internal_energy = kwargs['internal_energy']
-            if 'density' in kwargs:
-                self.density = kwargs['density']
-            if 'groupid' in kwargs:
-                self.groupid = kwargs['groupid']
-    
-    def UnitConversion(self, **kwargs):
-        """
-        Apply unit conversions to the data.
-        
-        Parameters
-        ----------
-        convert_to_physical : bool, optional
-            Convert from comoving to physical coordinates
-        convert_to_comoving : bool, optional
-            Convert from physical to comoving coordinates
-        convert_to_per_littleh : bool, optional
-            Convert to units per little h
-        convert_to_littleh : bool, optional
-            Convert from units per little h
-        """
-        if not hasattr(self, 'pos') or not hasattr(self, 'scale_factor'):
-            raise RuntimeError("No data loaded or missing cosmological parameters")
-        
-        if kwargs.get('convert_to_physical'):
-            self.pos *= self.ScaleFactor
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize *= self.ScaleFactor
-        
-        if kwargs.get('convert_to_comoving'):
-            self.pos /= self.ScaleFactor
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize /= self.ScaleFactor
-        
-        if kwargs.get('convert_to_per_littleh'):
-            self.pos *= self.HubbleParam
-            if hasattr(self, 'mass'):
-                self.mass *= self.HubbleParam
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize *= self.HubbleParam
-        
-        if kwargs.get('convert_to_littleh'):
-            self.pos /= self.HubbleParam
-            if hasattr(self, 'mass'):
-                self.mass /= self.HubbleParam
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize /= self.HubbleParam
+
 
 
 # Utility functions
