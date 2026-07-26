@@ -20,10 +20,12 @@ from .halos import HaloCatalogue
 from .trees import MergerTree, TrackDataset
 from .galaxies import GalaxyCatalogue
 from .epoch import EpochModel, EpochHaloView, at
+from .simulation import Simulation, Epoch, match_positions
 
 __all__ = ["load", "Dataset", "SnapshotDataset", "HaloCatalogue",
            "MergerTree", "TrackDataset", "GalaxyCatalogue",
-           "EpochModel", "EpochHaloView", "at", "FIELD_ALIASES"]
+           "EpochModel", "EpochHaloView", "at",
+           "Simulation", "Epoch", "match_positions", "FIELD_ALIASES"]
 
 #: kinds load() understands today; "field" (FDM) arrives in later work
 #: (see DEVELOPMENT.md section 5).

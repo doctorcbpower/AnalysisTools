@@ -122,6 +122,30 @@ class MergerTree:
         self.backend
         return self
 
+    def link_halos(self, catalogue, snapnum: Optional[int] = None) -> None:
+        """Link a halo catalogue for one snapshot, so tracks walked through
+        walkable trees can fill Mass/Pos/Vel at that epoch. Additive: call
+        once per epoch as catalogues become available."""
+        ht = _to_halo_tools(catalogue)
+        if snapnum is None:
+            snapnum = getattr(ht, "snapnum", None)
+            if snapnum is None and isinstance(catalogue, HaloCatalogue):
+                snapnum = catalogue.meta.get("snapnum")
+        if snapnum is None:
+            raise ValueError("link_halos(): could not determine snapnum; "
+                             "pass snapnum= explicitly.")
+        if self._halos is None:
+            self._halos = {}
+        elif not isinstance(self._halos, dict):
+            prev = self._halos
+            prev_ht = _to_halo_tools(prev)
+            prev_snap = getattr(prev_ht, "snapnum", None)
+            self._halos = {} if prev_snap is None \
+                else {int(prev_snap): prev}
+        self._halos[int(snapnum)] = catalogue
+        if self._backend is not None:
+            self._backend.halo_tools = self._halo_link()
+
     # ------------------------------------------------------------------
     # Queries -> TrackDataset
     # ------------------------------------------------------------------
