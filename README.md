@@ -125,7 +125,54 @@ Everything is lazy (no I/O until first field access), metadata is uniform (`ds.m
 
 ---
 
-## Quick Examples
+## SHARK Semi-Analytic Catalogues (`shark` package)
+
+The `shark` package now lives at `analysistools.shark` (the old top-level `import shark` still works via a deprecation shim). It provides lazy, cached access to SHARK galaxy catalogues, mirroring the `HaloModel` API so both can feed the same analysis and plotting code:
+
+```python
+from analysistools.shark.common import _redshift_table, parse_subvolumes
+from analysistools.shark.model import SharkModel
+
+rt = _redshift_table("redshift_list.txt")
+sv = parse_subvolumes("0-63")
+
+m = SharkModel("./CDM/base_model", rt, sv, label="CDM")
+
+mstar = m.mstars(redshift=0.0)          # mstars_disk + mstars_bulge
+sfr   = m.sfr(redshift=0.0)
+raw   = m.get("mvir_hosthalo", redshift=0.0)   # any native field by name
+```
+
+Available accessors include `mstars`, `mgas`, `sfr`, `ssfr`, `rstar`, `mhalo`, `msubhalo`, `mbh`, `mbulge`, `galaxy_type`, `h0`, `volume`, `age_at_z`, plus star formation history access (`sfh_disk`, `sfh_bulge`, `Z_disk_history`, ...).
+
+Higher-level components:
+
+| Module | Purpose |
+|--------|---------|
+| `shark.analysis` | `Analysis`: halo/stellar mass functions, SFR main sequence, size–mass, BH–bulge relations |
+| `shark.plots` | `Plotter`: standard comparison plots over one or more `SharkModel`s |
+| `shark.cli` | Command-line driver |
+| `shark.photometry` | fsps-based luminosities/magnitudes from metallicities and star formation histories |
+
+---
+
+## Merger Tree Formats
+
+| `treefileformat` | Tree builder | Reader/walker |
+|------------------|--------------|---------------|
+| `"SubFind"` | SubFind-HBT (GADGET-4) | `treeio_subfind` |
+| `"TreeFrog"` | TreeFrog / VELOCIraptor | `treeio_treefrog` |
+| `"MergerTree"` | AHF MergerTree | `treeio_ahf` |
+
+All return format-agnostic `HaloTrack` objects (`merger_tree_types`), so downstream analysis (`find_infall`, `analyse_orbit`) and plotting are format-independent.
+
+---
+
+## Appendix: Legacy Per-Class API
+
+Everything below documents the original per-class API (`SnapshotTools`, `HaloTools`, `MergerTreeTools`, ...). It remains fully supported -- the unified interface above is a layer on top of these classes, and `ds.backend` always exposes the underlying object. Prefer the unified interface for new work.
+
+### Quick Examples
 
 ### 1. Load and Read a Snapshot
 
@@ -259,7 +306,7 @@ combined.write_snapshot("combined.hdf5", idx=..., idx_type=...)
 
 ---
 
-## Working with Halo Catalogues
+### Working with Halo Catalogues
 
 ```python
 from analysistools.halo_tools import HaloTools
@@ -302,7 +349,7 @@ pos  = hm.position(redshift=0.0)
 
 ---
 
-## Merger Trees
+### Merger Trees
 
 `MergerTreeTools` dispatches to format-specific readers/walkers (SubFind-HBT, TreeFrog/VELOCIraptor, AHF MergerTree) and returns format-agnostic `HaloTrack` objects for downstream analysis and plotting:
 
@@ -322,7 +369,7 @@ print(event["snapshot"], event["mass"])
 
 ---
 
-## Profiles and Mass Functions
+### Profiles and Mass Functions
 
 ```python
 from analysistools.profile_tools import ProfileTools
@@ -338,7 +385,7 @@ pt.plot(rho, "density", ylabel=r"$\rho(r)$")
 
 ---
 
-## Gridding and Mesh Tools
+### Gridding and Mesh Tools
 
 ```python
 from analysistools.gridding_tools import GriddingTools
@@ -350,7 +397,7 @@ gt.plot_3d_slice(grid, grid_limits)
 
 ---
 
-## FDM (Fuzzy Dark Matter) Field Snapshots
+### FDM (Fuzzy Dark Matter) Field Snapshots
 
 `FDMFieldTools` is a mesh-field analogue to `SnapshotTools`, for reading FDM wavefunction field snapshots (not particle data):
 
@@ -368,50 +415,7 @@ field.mass      # mc^2, eV
 
 ---
 
-## SHARK Semi-Analytic Catalogues (`shark` package)
-
-The `shark` package now lives at `analysistools.shark` (the old top-level `import shark` still works via a deprecation shim). It provides lazy, cached access to SHARK galaxy catalogues, mirroring the `HaloModel` API so both can feed the same analysis and plotting code:
-
-```python
-from analysistools.shark.common import _redshift_table, parse_subvolumes
-from analysistools.shark.model import SharkModel
-
-rt = _redshift_table("redshift_list.txt")
-sv = parse_subvolumes("0-63")
-
-m = SharkModel("./CDM/base_model", rt, sv, label="CDM")
-
-mstar = m.mstars(redshift=0.0)          # mstars_disk + mstars_bulge
-sfr   = m.sfr(redshift=0.0)
-raw   = m.get("mvir_hosthalo", redshift=0.0)   # any native field by name
-```
-
-Available accessors include `mstars`, `mgas`, `sfr`, `ssfr`, `rstar`, `mhalo`, `msubhalo`, `mbh`, `mbulge`, `galaxy_type`, `h0`, `volume`, `age_at_z`, plus star formation history access (`sfh_disk`, `sfh_bulge`, `Z_disk_history`, ...).
-
-Higher-level components:
-
-| Module | Purpose |
-|--------|---------|
-| `shark.analysis` | `Analysis`: halo/stellar mass functions, SFR main sequence, size–mass, BH–bulge relations |
-| `shark.plots` | `Plotter`: standard comparison plots over one or more `SharkModel`s |
-| `shark.cli` | Command-line driver |
-| `shark.photometry` | fsps-based luminosities/magnitudes from metallicities and star formation histories |
-
----
-
-## Merger Tree Formats
-
-| `treefileformat` | Tree builder | Reader/walker |
-|------------------|--------------|---------------|
-| `"SubFind"` | SubFind-HBT (GADGET-4) | `treeio_subfind` |
-| `"TreeFrog"` | TreeFrog / VELOCIraptor | `treeio_treefrog` |
-| `"MergerTree"` | AHF MergerTree | `treeio_ahf` |
-
-All return format-agnostic `HaloTrack` objects (`merger_tree_types`), so downstream analysis (`find_infall`, `analyse_orbit`) and plotting are format-independent.
-
----
-
-## Supported Data Blocks (Snapshots)
+### Supported Data Blocks (Snapshots)
 
 | Block key | Description |
 |-----------|-------------|
@@ -431,7 +435,7 @@ All return format-agnostic `HaloTrack` objects (`merger_tree_types`), so downstr
 
 ---
 
-## Constructor Options (`SnapshotTools`)
+### Constructor Options (`SnapshotTools`)
 
 ```python
 SnapshotTools(
@@ -451,7 +455,7 @@ SnapshotTools(
 )
 ```
 
-## Constructor Options (`HaloTools`)
+### Constructor Options (`HaloTools`)
 
 ```python
 HaloTools(
