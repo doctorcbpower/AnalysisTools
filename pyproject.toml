@@ -26,6 +26,7 @@ dependencies = [
 test = ["pytest"]
 notebooks = ["nbformat", "nbclient", "ipykernel", "matplotlib-inline"]
 photometry = ["fsps"]        # python-fsps, for shark.photometry
+rendering = ["vortrace @ git+https://github.com/gusbeane/vortrace"]  # render_tools.VortraceRenderer
 
 [project.urls]
 Repository = "https://github.com/doctorcbpower/AnalysisTools"

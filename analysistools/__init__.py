@@ -15,6 +15,7 @@ from . import treeio_treefrog
 from . import treeio_ahf
 from . import profile_tools
 from . import gridding_tools
+from . import render_tools
 from . import fdm_field_tools
 from . import halo_model
 
@@ -31,6 +32,7 @@ from .api import (load, Dataset, SnapshotDataset, HaloCatalogue,
 from .ic_tools import ICTools
 from .merger_tree_tools import MergerTreeTools
 from .gridding_tools import GriddingTools
+from .render_tools import VortraceRenderer
 from .profile_tools import ProfileTools
 from .fdm_field_tools import FDMFieldTools
 
@@ -52,6 +54,7 @@ __all__ = [
     "treeio_ahf",
     "profile_tools",
     "gridding_tools",
+    "render_tools",
     "fdm_field_tools",
     "halo_model",
     "api",
@@ -73,6 +76,7 @@ __all__ = [
     "ICTools",
     "MergerTreeTools",
     "GriddingTools",
+    "VortraceRenderer",
     "ProfileTools",
     "FDMFieldTools",
 ]
