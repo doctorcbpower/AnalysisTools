@@ -7,6 +7,7 @@ It provides tools to:
 - Read and write simulation snapshots (HDF5 and GADGET binary)
 - Extract and manipulate particle data by type, and build initial conditions (merge, taper, rescale)
 - Select particles by geometry, and grid/smooth particle fields onto meshes
+- Render publication-quality Voronoi-mesh projections of Arepo output via [vortrace](https://github.com/gusbeane/vortrace) (optional dependency)
 - Read and standardise halo catalogues (SubFind, AHF, VELOCIraptor, SWIFT FOF)
 - Walk halo merger trees (SubFind-HBT, TreeFrog/VELOCIraptor, AHF MergerTree) and analyse orbits/infall
 - Compute radial/vertical density and kinematic profiles
@@ -22,7 +23,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for the roadmap towards a unified interface
 
 | Path | Contents |
 |------|----------|
-| `analysistools/` | Core package: snapshot, halo catalogue, merger tree, profile, gridding, FDM tools; unified `api/` layer |
+| `analysistools/` | Core package: snapshot, halo catalogue, merger tree, profile, gridding, rendering, FDM tools; unified `api/` layer |
 | `analysistools/shark/` | SHARK semi-analytic catalogue tools: `SharkModel` (lazy reader), `Analysis`, `Plotter`, CLI, fsps-based photometry |
 | `shark/` | Deprecated import shim → `analysistools.shark` |
 | `data/` | Small example data: `snap_0031.hdf5`, VELOCIraptor walkable trees, `halos/` catalogues |
@@ -40,6 +41,21 @@ pip install -e .
 
 The package is imported as `analysistools`; submodules use relative imports (e.g. `halo_tools.py` imports from `.haloio_subfind`), so it must be installed or run as a package rather than as loose scripts.
 
+### Optional Extras
+
+| Extra | Adds | Used by |
+|-------|------|---------|
+| `test` | `pytest` | Test suite |
+| `notebooks` | `nbformat`, `nbclient`, `ipykernel`, `matplotlib-inline` | Executing example notebooks |
+| `photometry` | `fsps` | `shark.photometry` |
+| `rendering` | `vortrace` (from GitHub; not on PyPI) | `render_tools.VortraceRenderer` |
+
+```bash
+pip install -e ".[rendering]"
+```
+
+`render_tools` itself imports fine without `vortrace` installed -- only instantiating `VortraceRenderer` requires it.
+
 ---
 
 ## Module Overview
@@ -51,6 +67,7 @@ The package is imported as `analysistools`; submodules use relative imports (e.g
 | `snapio_binary.py` | `read_binary` | Low-level GADGET binary format 1/2 snapshot I/O |
 | `ic_tools.py` | `ICTools` (extends `SnapshotTools`) | Build initial conditions: merge components, taper halo, rescale masses, excise types |
 | `gridding_tools.py` | `GriddingTools` | NGP/CIC mesh assignment, smoothing, Voronoi/nearest-neighbour slices, 3D grid plotting |
+| `render_tools.py` | `VortraceRenderer` | Exact Voronoi-mesh projections/volume rendering via the optional `vortrace` package (publication-quality alternative to `GriddingTools`' grid deposition) |
 | `profile_tools.py` | `ProfileTools`, `MassFunctionTools` | Volume/surface density, velocity dispersion, scale height profiles; halo mass functions |
 | `halo_tools.py` | `HaloTools` | Unified reader for halo catalogues (SubFind, AHF, VELOCIraptor, SWIFT FOF) |
 | `haloio_subfind.py`, `haloio_ahf.py`, `haloio_velociraptor.py`, `haloio_swiftfof.py` | `read_subfind`, `read_ahf`, `read_velociraptor`, `read_swiftfof` | Format-specific halo catalogue readers (used by `HaloTools`) |
@@ -394,6 +411,34 @@ gt = GriddingTools()
 grid = gt.smooth_to_grid(positions, values, grid_size, grid_limits)
 gt.plot_3d_slice(grid, grid_limits)
 ```
+
+---
+
+### Rendering with vortrace
+
+`VortraceRenderer` wraps [vortrace](https://github.com/gusbeane/vortrace)'s `ProjectionCloud`, which integrates exactly through the Arepo Voronoi mesh rather than depositing onto a Cartesian grid -- no NGP/CIC/Gaussian smoothing choice needed. Requires the `rendering` extra (`pip install -e ".[rendering]"`).
+
+```python
+from analysistools import SnapshotTools, VortraceRenderer
+
+snap = SnapshotTools(snapfileformat="HDF5", convention="Arepo")
+snap.read_snapshot("snap_010.hdf5")
+snap.LoadParticlesByType("gas")
+
+renderer = VortraceRenderer(snap.gas.pos, snap.gas.density)
+
+# single projection along z
+fig, ax = renderer.plot_projection(
+    extent=[40, 60, 40, 60], npix=512, bounds=[45, 55],
+)
+
+# three orthogonal projections through a centre, mirroring GriddingTools.plot_3d_projections
+fig, axes = renderer.plot_projections(
+    half_extent=10.0, npix=512, half_depth=2.5, centre=[50, 50, 50],
+)
+```
+
+`vortrace` always integrates along the third column of the `pos` array passed to `ProjectionCloud`; `project_orthogonal`/`plot_projections` handle reordering columns for the other two axes.
 
 ---
 
