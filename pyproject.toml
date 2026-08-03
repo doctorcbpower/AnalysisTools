@@ -26,7 +26,13 @@ dependencies = [
 test = ["pytest"]
 notebooks = ["nbformat", "nbclient", "ipykernel", "matplotlib-inline"]
 photometry = ["fsps"]        # python-fsps, for shark.photometry
-rendering = ["vortrace @ git+https://github.com/gusbeane/vortrace"]  # render_tools.VortraceRenderer
+rendering = [
+    "vortrace @ git+https://github.com/gusbeane/vortrace",  # render_tools.VortraceRenderer
+    "pyyaml",                                                # render_tools.ImbasRenderer.write_config
+]
+# imbas_renderer itself (https://github.com/doctorcbpower/imbas_renderer) is a
+# compiled C executable, not pip-installable -- build it separately and put
+# render_image on PATH, or pass executable=<path> to ImbasRenderer.
 
 [project.urls]
 Repository = "https://github.com/doctorcbpower/AnalysisTools"

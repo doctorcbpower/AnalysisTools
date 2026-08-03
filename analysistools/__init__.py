@@ -32,7 +32,7 @@ from .api import (load, Dataset, SnapshotDataset, HaloCatalogue,
 from .ic_tools import ICTools
 from .merger_tree_tools import MergerTreeTools
 from .gridding_tools import GriddingTools
-from .render_tools import VortraceRenderer
+from .render_tools import VortraceRenderer, ImbasRenderer
 from .profile_tools import ProfileTools
 from .fdm_field_tools import FDMFieldTools
 
@@ -77,6 +77,7 @@ __all__ = [
     "MergerTreeTools",
     "GriddingTools",
     "VortraceRenderer",
+    "ImbasRenderer",
     "ProfileTools",
     "FDMFieldTools",
 ]
