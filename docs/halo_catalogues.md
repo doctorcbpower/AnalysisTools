@@ -7,7 +7,7 @@ Covers `HaloTools` (single-catalogue reader) and `HaloModel` (lazy, cached, mult
 ```python
 from analysistools.halo_tools import HaloTools
 
-ht = HaloTools(comoving_units=True)
+ht = HaloTools(comoving=True, little_h=False)
 halos = ht.read_catalogue(
     filename="groups_010.hdf5",
     fileformat="SubFind",       # or "AHF", "VELOCIraptor", "SWIFT_FOF"
@@ -17,14 +17,14 @@ halos = ht.read_catalogue(
 ht.summary()
 ```
 
-`standardise=True` runs `halo_tools_standardise_names.standardise_catalogue_names`, mapping native per-format fields onto a common schema: `mass`, `pos`, `vel`, `radius`, `halo_id`, `num_part`.
+`standardise=True` runs `halo_tools_standardise_names.standardise_catalogue_names`, mapping native per-format fields onto a common schema (`mass`, `pos`, `vel`, `radius`, `halo_id`, `num_part`), then applies the `comoving`/`little_h` unit conversions -- both are no-ops with `standardise=False`, raw fields come back exactly as stored in the file. See [unified_interface.md](unified_interface.md#units-comoving-vs-physical-and-little-h) for what `comoving`/`little_h` actually mean (two independent axes -- don't conflate them) and, importantly, the `native_includes_h` override you should set explicitly for AHF/VELOCIraptor catalogues rather than trusting the per-format default guess.
 
 ## Centring SUBFIND groups on their primary subhalo
 
 By default, a SUBFIND group's `pos`/`vel` are `GroupPos`/`GroupVel` -- the FOF group's own centre, which substructure can offset from where the halo actually is. Pass `centre_on_subhalo=True` to use the group's primary subhalo instead (`GroupFirstSub` -> `SubhaloPos`/`SubhaloVel`), which is usually the better proxy for the halo centre:
 
 ```python
-ht = HaloTools(comoving_units=True, centre_on_subhalo=True)
+ht = HaloTools(comoving=True, little_h=False, centre_on_subhalo=True)
 halos = ht.read_catalogue(
     filename="groups_010.hdf5", fileformat="SUBFIND", standardise=True,
 )
@@ -56,18 +56,22 @@ hm = HaloModel(
     fileformat="SWIFT_FOF",
     label="CDM",
     comoving=True,
+    little_h=False,
     standardise=True,
 )
 
 mvir = hm.mvir(redshift=0.0)     # file is only read on first request
 pos  = hm.position(redshift=0.0)
+vol  = hm.volume(redshift=0.0)   # respects little_h/native_includes_h too
 ```
 
 ## Constructor Options (`HaloTools`)
 
 ```python
 HaloTools(
-    comoving_units = False,
+    comoving = True,
+    little_h = False,
+    native_includes_h = None,    # override the per-format guess; see above
     centre_on_subhalo = False,   # SUBFIND only, see above
     usehalocatonly = False,
     usesubstructure_file = False,
@@ -77,4 +81,4 @@ HaloTools(
 
 Supported `fileformat` values for `read_catalogue`: `"SUBFIND"`, `"AHF"`, `"VELOCIraptor"`, `"SWIFT_FOF"` (or integer codes 1-4).
 
-See also: [merger_trees.md](merger_trees.md) for walking trees built on top of these catalogues, and [unified_interface.md](unified_interface.md) for the `Dataset`-based API, including the `comoving` kwarg's little-*h* semantics (shared with `SnapshotDataset`) and metadata access.
+See also: [merger_trees.md](merger_trees.md) for walking trees built on top of these catalogues, and [unified_interface.md](unified_interface.md#units-comoving-vs-physical-and-little-h) for the `Dataset`-based API, the full `comoving`/`little_h` semantics (shared with `SnapshotDataset`), and metadata access.

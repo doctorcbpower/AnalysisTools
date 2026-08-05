@@ -11,15 +11,17 @@ import numpy as np
 from typing import Dict, Any, Tuple
 
 
-def read_subfind(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+def read_subfind(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """Read a SubFind-format halo catalogue (HDF5).
+
+    Returns raw values exactly as stored in the file -- comoving/little-h
+    unit conversion is applied centrally by HaloTools.standardise_names(),
+    not here (see its comoving/little_h parameters).
 
     Parameters
     ----------
     filename : str
         Path to the SubFind halo catalogue file.
-    comoving : bool, optional
-        If True, convert positions to comoving coordinates.
 
     Returns
     -------
@@ -54,13 +56,6 @@ def read_subfind(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any],
                 key: f["Subhalo/" + key][()] for key in f["Subhalo"].keys()
                 if isinstance(f["Subhalo/" + key], h5py.Dataset)
             }
-
-    # Optional comoving conversion
-    if comoving and "GroupPos" in halos and metadata.get("HubbleParam"):
-        hubble = metadata["HubbleParam"]
-        halos["GroupPos"] /= hubble
-        if "SubhaloPos" in subhalos:
-            subhalos["SubhaloPos"] /= hubble
 
     return metadata, halos, subhalos
 

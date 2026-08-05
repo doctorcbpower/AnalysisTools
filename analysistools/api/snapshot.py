@@ -23,6 +23,20 @@ from .dataset import Dataset
 SPECIES_TYPE_ATTR = {"gas": "gas_type", "dm": "dm_type",
                      "star": "star_type", "bh": "bh_type"}
 
+#: Whether each convention's *raw*, on-disk length/mass values already
+#: include the little-h factor (kpc/h-family, 1e10 Msol/h) or have it
+#: factored out (kpc-family, 1e10 Msol) -- a property of the simulation code,
+#: not of AnalysisTools. SWIFT stores h-free units by convention;
+#: GADGET/Arepo-family codes store h-scaled units. Mirrors
+#: HaloTools.NATIVE_INCLUDES_LITTLE_H (SWIFT_FOF halo catalogues, built from
+#: SWIFT snapshots, use the same False).
+SNAPSHOT_NATIVE_INCLUDES_LITTLE_H = {
+    "SWIFT": False,
+    "GADGET4": True,
+    "AREPO": True,
+    "GADGET2/3": True,
+}
+
 #: header/config scalars SnapshotData may carry after read_snapshot(), beyond
 #: the handful promoted to top-level meta keys -- mirrors the attribute list
 #: SnapshotTools._transfer_attributes_to_writer uses for the same purpose.
@@ -57,13 +71,24 @@ class SnapshotDataset(Dataset):
         "SWIFT", "GADGET4", "AREPO", "GADGET2/3". The load() factory sniffs
         this from the file; default here is SnapshotTools' default.
     comoving : bool, optional
-        If True (default, matching HaloCatalogue's default), 'pos', 'mass',
-        and 'boxsize' are divided by the snapshot's HubbleParam -- i.e. the
-        little-h factor is stripped, exactly as HaloCatalogue(comoving=True)
-        does for GroupPos/SubhaloPos. Pass comoving=False to get values
-        exactly as stored in the file (typically h^-1 code units for
-        GADGET/Arepo/SWIFT). Set both adapters the same way when
-        cross-matching particles against halo positions.
+        If True (default), 'pos'/'boxsize' are comoving (a no-op, since
+        that's the native storage convention). If False, converted to
+        physical coordinates (multiplied by the scale factor). This is the
+        scale-factor axis, independent of little_h below -- see little_h's
+        docstring for why the two must not be conflated (a common source of
+        factor-of-h mismatches between snapshots/catalogues from different
+        codes).
+    little_h : bool, optional
+        If True, 'pos'/'mass'/'boxsize' are in little-h units (kpc/h-family,
+        1e10 Msol/h). If False (default), h is divided out -- but whether
+        that's actually a no-op or a real conversion depends on the
+        snapshot's *convention*: SWIFT already stores h-free values;
+        GADGET4/AREPO/GADGET2-3 store h-scaled values (see
+        SNAPSHOT_NATIVE_INCLUDES_LITTLE_H). Set both SnapshotDataset and
+        HaloCatalogue to the same little_h state when cross-matching
+        particles against halo positions -- mixing e.g. a SWIFT snapshot
+        (native h-free) against a SubFind catalogue (native h-included)
+        without accounting for this is a common source of mismatches.
     label : str, optional
         Name for plot legends.
     **backend_kwargs :
@@ -82,6 +107,7 @@ class SnapshotDataset(Dataset):
     def __init__(self, path: str, fileformat: str = "HDF5",
                  convention: Optional[str] = None,
                  comoving: bool = True,
+                 little_h: bool = False,
                  label: Optional[str] = None, **backend_kwargs):
         super().__init__(path=path, fileformat=fileformat, label=label)
         backend_kwargs.setdefault("loglevel", 30)   # WARNING: quiet library
@@ -89,6 +115,7 @@ class SnapshotDataset(Dataset):
                                       **backend_kwargs)
         self._convention = convention
         self._comoving = comoving
+        self._little_h = little_h
         self._data = None                  # SnapshotData, set by _load()
 
     # ------------------------------------------------------------------
@@ -111,23 +138,53 @@ class SnapshotDataset(Dataset):
         a = _scalar(getattr(d, "scale_factor", 1.0))
         h0 = _scalar(getattr(d, "hubble_param", 0.0)) or None
         boxsize = _scalar(getattr(d, "box_size", 0.0)) or None
+        convention = self._convention or self._backend.convention
 
-        # strip the little-h factor, matching HaloCatalogue(comoving=True)'s
-        # GroupPos/SubhaloPos conversion -- out-of-place, so self._backend's
-        # own arrays (reachable via .backend/.data) are left untouched.
-        strip_h = bool(self._comoving and h0)
-        if strip_h:
-            for key in ("pos", "mass"):
-                if key in self._columns:
-                    self._columns[key] = self._columns[key] / h0
-            boxsize = boxsize / h0 if boxsize is not None else None
+        # Two independent conversions, reduced to one scalar factor per
+        # quantity, applied out-of-place -- self._backend's own arrays
+        # (reachable via .backend/.data) are left untouched either way.
+        length_factor = 1.0
+        mass_factor = 1.0
+
+        if not self._comoving:
+            # native storage is always comoving; convert to physical
+            length_factor *= a
+
+        native_includes_h = SNAPSHOT_NATIVE_INCLUDES_LITTLE_H.get(
+            str(convention).upper(), True)
+        little_h_applied = False
+        if self._little_h != native_includes_h:
+            if h0:
+                # native h-included -> h-free: divide. native h-free ->
+                # h-included: multiply (kpc/h = kpc * h).
+                h_factor = (1.0 / h0) if native_includes_h else h0
+                length_factor *= h_factor
+                mass_factor *= h_factor
+                little_h_applied = True
+            else:
+                self._backend.logger.warning(
+                    "little_h=%s requested but no HubbleParam is available "
+                    "for this snapshot; pos/mass/boxsize left as-is.",
+                    self._little_h)
+
+        if length_factor != 1.0 and "pos" in self._columns:
+            self._columns["pos"] = self._columns["pos"] * length_factor
+        if mass_factor != 1.0 and "mass" in self._columns:
+            self._columns["mass"] = self._columns["mass"] * mass_factor
+        if length_factor != 1.0 and boxsize is not None:
+            boxsize = boxsize * length_factor
+
+        # actual resulting state, which may differ from the requested
+        # little_h if h0 wasn't available to apply the conversion
+        resulting_little_h = self._little_h if (little_h_applied or self._little_h == native_includes_h) else native_includes_h
 
         length_unit = "code (kpc-family, see backend unit_* attrs)"
         mass_unit = "code (1e10 Msol-family)"
         if h0:
-            suffix = ", h-free" if strip_h else ", per h"
+            suffix = ", h-included" if resulting_little_h else ", h-free"
             length_unit += suffix
             mass_unit += suffix
+        length_unit += ", comoving" if self._comoving else ", physical"
 
         def _unwrap(x):
             # HDF5 attrs often arrive as 0-d/1-element arrays; reduce those
@@ -151,11 +208,12 @@ class SnapshotDataset(Dataset):
             "redshift": 1.0 / a - 1.0 if a > 0 else None,
             "boxsize": boxsize,
             "h0": h0,
-            "comoving": strip_h,
+            "comoving": self._comoving,
+            "little_h": resulting_little_h,
             "omega_0": _scalar(getattr(d, "omega_0", 0.0)) or None,
             "omega_lambda": _scalar(getattr(d, "omega_lambda", 0.0)) or None,
             "num_part_total": np.asarray(getattr(d, "num_part_total", [])),
-            "convention": self._convention or self._backend.convention,
+            "convention": convention,
             "native_meta": native_meta,
             # plain strings (no astropy) -- GADGET-family defaults
             "units": {"length": length_unit,

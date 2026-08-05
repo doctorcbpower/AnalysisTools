@@ -57,18 +57,22 @@ track = epoch.track_of(index=0)                   # catalogue auto-linked
 
 Everything is lazy (no I/O until first field access), metadata is uniform (`ds.meta["redshift"]`, `["boxsize"]`, `["h0"]`), and the underlying legacy object stays reachable via `ds.backend`. The per-class API documented in the other `docs/` pages is unchanged and fully supported — the unified interface is a layer on top of it.
 
-## Units: little-h
+## Units: comoving vs. physical, and little-h
 
-Both `SnapshotDataset` and `HaloCatalogue` take a `comoving` kwarg (default `True` on both) that controls whether the little-*h* factor is stripped from length/mass fields:
+These are two **independent** axes -- don't conflate them, and don't assume `comoving` controls h (an earlier version of this doc, and of the code, did exactly that). Both `SnapshotDataset` and `HaloCatalogue` take both kwargs, with the same meaning on each:
+
+- **`comoving`** (default `True` on both): scale-factor axis. Catalogues/snapshots are always stored comoving on disk, so `comoving=True` is a no-op; `comoving=False` multiplies `pos`/`boxsize` by the scale factor `a` to convert to physical coordinates. Never touches `mass`.
+- **`little_h`** (default `False` on both): whether `pos`/`mass`/`boxsize` are in little-*h* units (Mpc/h-family, 1e10 Msol/h) or h-free (Mpc-family, Msol). Whether `little_h=False` (the default) actually *does* anything depends on the **native convention of the specific format/code the data came from** -- SWIFT already stores h-free values; GADGET/Arepo-family codes (SubFind, and conventionally AHF/VELOCIraptor) store h-scaled values. Mixing a SWIFT-origin snapshot against a SubFind-origin catalogue (or vice versa) without accounting for this is exactly the kind of mismatch that motivated this split.
 
 ```python
-snap  = at.load("snap_0031.hdf5", comoving=True)                       # pos, mass, boxsize / h0
-halos = at.load("halos.VELOCIraptor.properties.0", fileformat="VELOCIraptor", comoving=True)  # pos / h0
+snap  = at.load("snap_0031.hdf5")                                              # comoving=True, little_h=False
+halos = at.load("halos.VELOCIraptor.properties.0", fileformat="VELOCIraptor",
+                 native_includes_h=False)                                      # see caveat below
 ```
 
-With the defaults, both come back with the little-*h* factor already divided out, so `snap["pos"]` and `halos["pos"]` are directly comparable. Pass `comoving=False` on either (or both) to get values exactly as stored in the file instead (typically h⁻¹ code units for GADGET/Arepo/SWIFT snapshots and h⁻¹ Mpc for halo catalogues) -- set both adapters the same way rather than mixing, or particle/halo positions will be off by a factor of `h0`. Check `ds.meta["comoving"]` (snapshots) if you need to confirm which state a given `Dataset` ended up in.
+With the defaults, `snap["pos"]` and `halos["pos"]` come back in the same (comoving, h-free) units, directly comparable -- *provided* the little-h native-convention guess is correct for both. Check `ds.meta["comoving"]`/`ds.meta["little_h"]` to confirm which state a given `Dataset` actually ended up in (it may differ from what was requested if `HubbleParam`/scale factor weren't available -- a warning is logged when that happens).
 
-This only affects `pos`/`mass`/`boxsize`; it does not touch the separate comoving-vs-physical (scale factor) axis -- see `SnapshotTools.UnitConversion`'s `convert_to_physical`/`convert_to_comoving` in [snapshots.md](snapshots.md) for that.
+**Caveat for AHF/VELOCIraptor**: unlike SubFind (which *is* GADGET/Arepo's own group finder, so always inherits its h-scaled convention), AHF and VELOCIraptor are standalone halo finders that inherit whatever convention their *input snapshot* used -- there's no fixed answer for "AHF's native units" or "VELOCIraptor's native units" the way there is for SubFind or SWIFT_FOF. Confirmed with this repo's own bundled test data: `data/halos/snap_0031.VELOCIraptor.properties.0` was run against the SWIFT snapshot `data/snap_0031.hdf5`, and its `Period` is SWIFT's raw h-free `BoxSize` passed straight through -- not converted to a Mpc/h convention. `HaloTools`/`HaloCatalogue`/`HaloModel`'s default guess (`NATIVE_INCLUDES_LITTLE_H`, `True` for both formats) would silently double-strip h for a catalogue like this. Pass `native_includes_h=False` (or `True`) explicitly for AHF/VELOCIraptor once you've checked which convention your specific catalogue actually uses (e.g. compare its `BoxSize`/`Period` against its source snapshot's, as done above) -- don't trust the default for these two formats.
 
 ## Accessing metadata / header info
 
@@ -80,7 +84,7 @@ snap.meta["redshift"], snap.meta["h0"], snap.meta["boxsize"]
 snap.summary()
 ```
 
-Both `HaloCatalogue` and `SnapshotDataset` also keep a raw header/config dict at `ds.meta["native_meta"]`, for fields that don't have a standardised `meta` key -- e.g. `omega_dm`/`omega_bar` (SWIFT-only split of `omega_0`), `mass_table`, `dimension`, `num_files`, `ispotential`/`isgroupid`. For `SnapshotDataset` this is always the raw, un-h-stripped value regardless of the `comoving` setting -- only the standardised top-level keys (`pos`, `mass`, `boxsize`) get the little-*h* conversion.
+Both `HaloCatalogue` and `SnapshotDataset` also keep a raw header/config dict at `ds.meta["native_meta"]`, for fields that don't have a standardised `meta` key -- e.g. `omega_dm`/`omega_bar` (SWIFT-only split of `omega_0`), `mass_table`, `dimension`, `num_files`, `ispotential`/`isgroupid`. This is always the raw, unconverted value regardless of `comoving`/`little_h` -- only the standardised top-level keys (`pos`, `mass`, `boxsize`) get those conversions.
 
 ```python
 snap.meta["native_meta"]["omega_dm"], snap.meta["native_meta"]["mass_table"]

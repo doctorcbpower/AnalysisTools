@@ -30,7 +30,7 @@ merger_tree_tools.py    MergerTreeTools (this file): dispatch + analysis + plott
 
 Typical usage
 -------------
->>> ht = HaloTools(comoving_units=True)
+>>> ht = HaloTools(comoving=True, little_h=False)
 >>> ht.read_catalogue("groups_010.hdf5", fileformat="SubFind", standardise=True)
 >>>
 >>> mt = MergerTreeTools("trees.hdf5", treefileformat="SubFind")

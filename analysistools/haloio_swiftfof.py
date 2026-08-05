@@ -11,15 +11,18 @@ import numpy as np
 from typing import Dict, Any, Tuple
 
 
-def read_swiftfof(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+def read_swiftfof(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """Read a SWIFT-format FOF catalogue (HDF5).
+
+    Returns raw values exactly as stored in the file -- comoving/little-h
+    unit conversion is applied centrally by HaloTools.standardise_names(),
+    not here (see its comoving/little_h parameters). Note SWIFT's own native
+    convention already excludes h (lengths in Mpc, not Mpc/h).
 
     Parameters
     ----------
     filename : str
         Path to the SWIFT FOF catalogue file.
-    comoving : bool, optional
-        If True, convert positions to comoving coordinates.
 
     Returns
     -------
@@ -48,10 +51,5 @@ def read_swiftfof(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any]
         halos = {key: f["Groups/" + key][()] for key in f["Groups"].keys() if isinstance(f["Groups/" + key], h5py.Dataset)}
         subhalos = {}
         
-    # Optional comoving conversion
-    if comoving and "GroupPos" in halos and metadata.get("HubbleParam"):
-        hubble = metadata["HubbleParam"]
-        halos["GroupPos"] /= hubble
-
     return metadata, halos, subhalos
 

@@ -30,7 +30,19 @@ class HaloCatalogue(Dataset):
     fileformat : str or int
         "SUBFIND", "AHF", "VELOCIraptor", "SWIFT_FOF" (or codes 1-4).
     comoving : bool, optional
-        Return positions in comoving coordinates (HaloTools comoving_units).
+        If True (default), pos/boxsize are comoving (a no-op, since that's
+        the native storage convention). If False, converted to physical
+        coordinates. This is the scale-factor axis, independent of little_h
+        below -- see HaloTools' docstring for why the two must not be
+        conflated (a common source of factor-of-h mismatches between
+        catalogue formats).
+    little_h : bool, optional
+        If True, pos/mass/boxsize are in little-h units (Mpc/h, 1e10
+        Msol/h). If False (default), h is divided out -- but whether that's
+        actually a no-op or a real conversion depends on the catalogue
+        format's native convention: SWIFT_FOF is already h-free; SUBFIND
+        (and conventionally AHF/VELOCIraptor) are not. See
+        HaloTools.NATIVE_INCLUDES_LITTLE_H.
     snapnum : int, optional
         Recorded for merger-tree lookups (MergerTreeTools.from_halo).
     label : str, optional
@@ -39,7 +51,11 @@ class HaloCatalogue(Dataset):
         Any further HaloTools constructor options, e.g. centre_on_subhalo=True
         (SUBFIND only: use each group's primary subhalo -- GroupFirstSub ->
         SubhaloPos/SubhaloVel -- as its 'pos'/'vel' instead of GroupPos/
-        GroupVel; see HaloTools' docstring).
+        GroupVel), or native_includes_h=False/True to override
+        NATIVE_INCLUDES_LITTLE_H's per-format guess -- strongly recommended
+        for AHF/VELOCIraptor catalogues, whose native little-h convention
+        depends on the snapshot they were run against, not a fixed property
+        of the format (see HaloTools' docstring).
 
     Examples
     --------
@@ -56,11 +72,13 @@ class HaloCatalogue(Dataset):
     kind = "halos"
 
     def __init__(self, path: str, fileformat, comoving: bool = True,
+                 little_h: bool = False,
                  snapnum: Optional[int] = None,
                  label: Optional[str] = None, **backend_kwargs):
         super().__init__(path=path, fileformat=str(fileformat), label=label)
         backend_kwargs.setdefault("loglevel", 30)
-        self._backend = HaloTools(comoving_units=comoving, **backend_kwargs)
+        self._backend = HaloTools(comoving=comoving, little_h=little_h,
+                                  **backend_kwargs)
         self._snapnum = snapnum
         self._sub_columns: Optional[Dict[str, np.ndarray]] = None
 
@@ -78,15 +96,24 @@ class HaloCatalogue(Dataset):
                              if subhalos else None)
 
         a = float(meta.get("ScaleFactor", 1.0) or 1.0)
+        comoving = self._backend.comoving
+        little_h = self._backend.little_h
+        h_suffix = ", h-included" if little_h else ", h-free"
+        native_meta = {k: v for k, v in meta.items() if not k.startswith("_")}
+
         self.meta.update({
             "scale_factor": a,
             "redshift": 1.0 / a - 1.0 if a > 0 else None,
             "boxsize": (float(meta["BoxSize"])
                         if meta.get("BoxSize") is not None else None),
+            "h0": meta.get("HubbleParam"),
+            "comoving": comoving,
+            "little_h": little_h,
             "n_groups": int(meta.get("TotNgroups", 0) or 0),
             "snapnum": self._snapnum,
-            "native_meta": dict(meta),
-            "units": {"length": "catalogue-native", "mass": "catalogue-native",
+            "native_meta": native_meta,
+            "units": {"length": "catalogue-native" + h_suffix,
+                      "mass": "catalogue-native" + h_suffix,
                       "velocity": "km/s"},
         })
         # normalise the canonical format string chosen by HaloTools

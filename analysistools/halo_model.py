@@ -49,7 +49,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from .halo_tools import HaloTools, FORMAT_READERS
+from .halo_tools import HaloTools, FORMAT_READERS, NATIVE_INCLUDES_LITTLE_H
 
 # ---------------------------------------------------------------------------
 # Redshift table helper
@@ -108,10 +108,29 @@ class HaloModel:
     colour : str, optional
         Matplotlib colour string.  Assigned by Plotter if omitted.
     comoving : bool, optional
-        If True, positions are returned in comoving coordinates.
+        If True (default), positions/boxsize are comoving (a no-op, since
+        that's the native storage convention). If False, converted to
+        physical coordinates. Independent of little_h -- see HaloTools'
+        docstring for why the two must not be conflated.
+    little_h : bool, optional
+        If True, pos/mass/boxsize are in little-h units (Mpc/h, 1e10
+        Msol/h). If False (default), h is divided out -- but whether that's
+        actually a no-op or a real conversion depends on the catalogue
+        format's native convention (see HaloTools.NATIVE_INCLUDES_LITTLE_H);
+        SWIFT_FOF is already h-free, SUBFIND/AHF/VELOCIraptor conventionally
+        aren't -- and for AHF/VELOCIraptor that's only a common-case guess,
+        not a guarantee (see native_includes_h).
+    native_includes_h : bool, optional
+        Override HaloTools.NATIVE_INCLUDES_LITTLE_H's per-format guess.
+        Strongly recommended for AHF/VELOCIraptor, whose native convention
+        depends on the snapshot they were run against, not a fixed property
+        of the format -- see HaloTools' docstring.
     standardise : bool, optional
         If True, field names are normalised to the common schema via
-        ``standardise_catalogue_names`` before caching.
+        ``standardise_catalogue_names`` before caching. comoving/little_h
+        conversion only happens as part of this step -- with the default
+        standardise=False, comoving/little_h have no effect and raw fields
+        come back exactly as stored in the file.
     loglevel : int, optional
         Logging level (default logging.WARNING — less verbose than HaloTools
         default so notebooks stay quiet).
@@ -133,6 +152,8 @@ class HaloModel:
         label:       Optional[str]  = None,
         colour:      Optional[str]  = None,
         comoving:    bool           = True,
+        little_h:    bool           = False,
+        native_includes_h: Optional[bool] = None,
         standardise: bool           = False,
         loglevel:    int            = logging.WARNING,
     ):
@@ -141,10 +162,14 @@ class HaloModel:
         self.label       = label or "HaloModel"
         self.colour      = colour
         self.comoving    = comoving
+        self.little_h    = little_h
+        self.native_includes_h = native_includes_h
         self.standardise = standardise
 
         # Internal HaloTools instance — reused for every load
-        self._ht = HaloTools(comoving_units=comoving, loglevel=loglevel)
+        self._ht = HaloTools(comoving=comoving, little_h=little_h,
+                             native_includes_h=native_includes_h,
+                             loglevel=loglevel)
 
         # Cache: redshift_key -> {"halos": dict, "subhalos": dict, "meta": dict}
         self._cache: Dict[float, Dict[str, Any]] = {}
@@ -316,14 +341,31 @@ class HaloModel:
         raise KeyError(f"Hubble parameter not found in metadata: {meta}")
 
     def volume(self, redshift: float) -> float:
-        """Box volume in Mpc^3 inferred from metadata BoxSize and h0."""
+        """Box volume in (Mpc, or Mpc/h if little_h=True) ^3.
+
+        BoxSize's little-h state depends on the catalogue format's native
+        convention (SWIFT_FOF is already h-free, unlike SUBFIND/AHF/
+        VELOCIraptor) -- assuming it's always Mpc/h, as this method
+        previously did unconditionally, silently over-divides SWIFT_FOF
+        volumes by an extra factor of h^3. With standardise=True, BoxSize in
+        metadata has already been put in the requested little_h state by
+        HaloTools, so it's used as-is; with standardise=False (the default),
+        it's the format's raw native BoxSize, only divided by h if that
+        format's native convention includes it.
+        """
         meta = self.get_meta(redshift)
         box = meta.get("BoxSize")
         if box is None:
             raise KeyError("BoxSize not found in catalogue metadata.")
-        h = self.h0(redshift)
-        # BoxSize is typically in Mpc/h — convert to Mpc^3
-        return float(box / h) ** 3
+        if self.standardise:
+            return float(box) ** 3
+        native_includes_h = (
+            self.native_includes_h if self.native_includes_h is not None
+            else NATIVE_INCLUDES_LITTLE_H.get(
+                getattr(self._ht, "halocatfileformat", None), True))
+        if native_includes_h:
+            return float(box / self.h0(redshift)) ** 3
+        return float(box) ** 3
 
     def is_loaded(self, redshift: float) -> bool:
         """True if the catalogue for the snapshot nearest *redshift* is cached."""

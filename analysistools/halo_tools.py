@@ -30,6 +30,23 @@ FORMAT_READERS = {
 #    "SWIFT_HBT": read_swifthbt,
 }
 
+# Whether each format's *raw*, on-disk length/mass values already include
+# the little-h factor (Mpc/h, 1e10 Msun/h) or have it factored out (Mpc,
+# Msun) -- a property of the simulation code the catalogue was built from,
+# not of AnalysisTools. SWIFT stores h-free units by convention; SubFind (run
+# directly on GADGET/Arepo output) stores h-scaled units. AHF and
+# VELOCIraptor are conventionally run against GADGET/Arepo-family output too
+# (hence True here), but either can in principle be run against a SWIFT
+# snapshot instead -- if that's your case, this default is wrong for your
+# catalogue and little_h will silently apply the wrong conversion, so verify
+# against your catalogue's own documented units before trusting it.
+NATIVE_INCLUDES_LITTLE_H = {
+    "SUBFIND": True,
+    "AHF": True,
+    "VELOCIraptor": True,
+    "SWIFT_FOF": False,
+}
+
 # ---------------------------------------------------------------------
 # Main user-facing class
 # ---------------------------------------------------------------------
@@ -38,10 +55,58 @@ class HaloTools:
     """
     Unified high-level interface to load and inspect halo catalogues.
 
+    Two independent unit axes, both applied in standardise_names() (raw
+    read_catalogue() output without standardise=True is untouched, exactly
+    as stored in the file):
+
+    - comoving vs physical (scale factor 'a'): catalogues are always stored
+      comoving on disk, so comoving=True (default) is a no-op; comoving=False
+      multiplies pos/boxsize by 'a' to convert to physical coordinates.
+    - little-h (whether Mpc/h or Mpc, 1e10 Msun/h or Msun): *not* the same
+      axis as the above, and the two must not be conflated -- a value can be
+      comoving-and-h-scaled, physical-and-h-free, or any other combination.
+      Whether little_h=True/False requires actually dividing/multiplying by h
+      depends on the *catalogue format's own native convention*: SWIFT
+      already stores h-free values, GADGET/Arepo-family codes (SubFind, and
+      conventionally AHF/VELOCIraptor) store h-scaled values -- see
+      NATIVE_INCLUDES_LITTLE_H. Comparing a SWIFT-origin catalogue against a
+      SubFind/Arepo one without accounting for this is a common source of
+      factor-of-h mismatches.
+
+      SubFind's convention is fixed (it's GADGET/Arepo's own group finder).
+      AHF and VELOCIraptor's are *not* fixed -- both are standalone halo
+      finders that inherit whatever convention their input snapshot used,
+      so NATIVE_INCLUDES_LITTLE_H's True default for them is only a common-
+      case guess, not a guarantee. Confirmed by example: a VELOCIraptor
+      catalogue in this repo's own test data was run against a SWIFT
+      snapshot and its Period is SWIFT's raw h-free BoxSize passed straight
+      through, not VELOCIraptor's own h-scaled convention -- the True
+      default would silently double-strip h for that catalogue. Pass
+      native_includes_h= explicitly for AHF/VELOCIraptor rather than
+      trusting the default, unless you've verified it against your
+      catalogue's own units documentation.
+
     Parameters
     ----------
-    comoving_units : bool, optional
-        See individual reader docstrings (divides positions by HubbleParam).
+    comoving : bool, optional
+        If True (default), ensure pos/boxsize are comoving (a no-op, since
+        that's how these catalogues are stored). If False, convert to
+        physical coordinates (multiply by the scale factor).
+    little_h : bool, optional
+        If True, ensure pos/mass/boxsize are in little-h units (Mpc/h,
+        1e10 Msun/h). If False (default), ensure h is divided out (Mpc,
+        Msun) -- physical units most analysis code expects. Whether this
+        actually changes anything depends on the catalogue format's native
+        convention (NATIVE_INCLUDES_LITTLE_H); a no-op is correctly applied
+        for SWIFT_FOF even when little_h=False, since SWIFT is already
+        h-free. No-ops (with a warning) if the catalogue's HubbleParam isn't
+        available (currently: AHF; VELOCIraptor only if a '.siminfo' sidecar file is present).
+    native_includes_h : bool, optional
+        Override NATIVE_INCLUDES_LITTLE_H's per-format guess for whether
+        this catalogue's *raw* pos/mass/BoxSize already include h. Default
+        None (use the table). Strongly recommended for AHF/VELOCIraptor,
+        whose native convention actually depends on the snapshot they were
+        run against, not a fixed property of the format -- see above.
     centre_on_subhalo : bool, optional
         SUBFIND only. If True, standardise_names() replaces each group's
         'pos' (and 'vel', if present) with its primary subhalo's
@@ -57,7 +122,7 @@ class HaloTools:
 
     Examples
     --------
-    >>> ht = HaloTools(comoving_units=True, centre_on_subhalo=True)
+    >>> ht = HaloTools(comoving=True, little_h=False, centre_on_subhalo=True)
     >>> halos = ht.read_catalogue(filename="groups_010.hdf5",fileformat="SubFind",
     ...                            standardise=True)
     >>> ht.summary()
@@ -65,7 +130,9 @@ class HaloTools:
 
     def __init__(
         self,
-        comoving_units: bool = False,
+        comoving: bool = True,
+        little_h: bool = False,
+        native_includes_h: Optional[bool] = None,
         centre_on_subhalo: bool = False,
         **kwargs,
     ):
@@ -82,7 +149,9 @@ class HaloTools:
             5: "SWIFT_HBT",
         }
 
-        self.comoving_units = comoving_units
+        self.comoving = comoving
+        self.little_h = little_h
+        self.native_includes_h = native_includes_h
         self.centre_on_subhalo = centre_on_subhalo
         self.metadata: Dict[str, Any] = {}
         self.halos: Optional[Dict[str, np.ndarray]] = None
@@ -143,7 +212,7 @@ class HaloTools:
         reader = FORMAT_READERS[self.halocatfileformat]
 
         self.logger.info(f"Reading halo catalogue '{filename}' using {self.halocatfileformat}")
-        self.metadata, self.halos, self.subhalos = reader(filename, comoving=self.comoving_units)
+        self.metadata, self.halos, self.subhalos = reader(filename)
 
         nh = len(next(iter(self.halos.values()))) if self.halos else 0
         self.logger.info(f"Loaded {nh:,} halos from {self.halocatfileformat} file.")
@@ -180,6 +249,89 @@ class HaloTools:
                 and self.standardised_halos is not None
                 and self.standardised_subhalos is not None):
             self._centre_on_first_subhalo()
+
+        self._apply_unit_conventions()
+
+    def _get_scale_factor(self) -> Optional[float]:
+        """Best-effort scale factor 'a' from self.metadata (ScaleFactor
+        directly, or derived from Redshift), or None if unavailable."""
+        meta = self.metadata or {}
+        if meta.get("ScaleFactor") is not None:
+            return float(meta["ScaleFactor"])
+        z = meta.get("Redshift")
+        if z is not None:
+            return 1.0 / (1.0 + float(z))
+        return None
+
+    def _get_hubble_param(self) -> Optional[float]:
+        """Best-effort HubbleParam from self.metadata, or None if this
+        format's reader doesn't provide one (currently: AHF; VELOCIraptor only if a '.siminfo' sidecar is present)."""
+        meta = self.metadata or {}
+        for key in ("HubbleParam", "h", "hubble"):
+            if meta.get(key) is not None:
+                return float(meta[key])
+        return None
+
+    def _apply_unit_conventions(self) -> None:
+        """Apply the comoving (scale-factor) and little_h conversions to
+        self.standardised_halos/self.standardised_subhalos['pos'/'mass'] and
+        self.metadata['BoxSize'], so all three end up in the same units --
+        see the comoving/little_h parameters in the class docstring.
+
+        Both axes reduce to a single combined scalar factor per quantity
+        (length_factor for pos/BoxSize, mass_factor for mass), applied once,
+        out-of-place, to whichever standardised tables/fields exist.
+        """
+        length_factor = 1.0
+        mass_factor = 1.0
+
+        a = self._get_scale_factor()
+        if not self.comoving:
+            if a is not None:
+                length_factor *= a
+            else:
+                self.logger.warning(
+                    "comoving=False requested but no scale factor could be "
+                    "determined for this %s catalogue; pos/BoxSize left "
+                    "comoving.", self.halocatfileformat)
+
+        native_includes_h = (
+            self.native_includes_h if self.native_includes_h is not None
+            else NATIVE_INCLUDES_LITTLE_H.get(self.halocatfileformat, True))
+        if self.little_h != native_includes_h:
+            h = self._get_hubble_param()
+            if h:
+                # native h-included -> h-free: divide. native h-free ->
+                # h-included: multiply. (Mpc/h = Mpc * h, per the standard
+                # little-h convention -- see docs/unified_interface.md.)
+                h_factor = (1.0 / h) if native_includes_h else h
+                length_factor *= h_factor
+                mass_factor *= h_factor
+            else:
+                self.logger.warning(
+                    "little_h=%s requested but no HubbleParam is available "
+                    "for this %s catalogue; pos/mass/BoxSize left as-is.",
+                    self.little_h, self.halocatfileformat)
+
+        if length_factor == 1.0 and mass_factor == 1.0:
+            return
+
+        for table in (self.standardised_halos, self.standardised_subhalos):
+            if table is None:
+                continue
+            if table.get("pos") is not None and length_factor != 1.0:
+                table["pos"] = table["pos"] * length_factor
+            if table.get("mass") is not None and mass_factor != 1.0:
+                table["mass"] = table["mass"] * mass_factor
+
+        if self.metadata.get("BoxSize") is not None and length_factor != 1.0:
+            # Convert from the raw, on-disk BoxSize (stashed on first call)
+            # rather than the already-converted value, so re-running
+            # standardise_names() on the same HaloTools instance doesn't
+            # compound the factor.
+            raw_boxsize = self.metadata.setdefault(
+                "_raw_boxsize", self.metadata["BoxSize"])
+            self.metadata["BoxSize"] = raw_boxsize * length_factor
 
     def _centre_on_first_subhalo(self) -> None:
         """Re-centre self.standardised_halos on each group's primary

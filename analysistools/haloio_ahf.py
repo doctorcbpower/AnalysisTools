@@ -11,15 +11,19 @@ import numpy as np
 from typing import Dict, Any, Tuple
 
 
-def read_ahf(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+def read_ahf(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """Read an AHF halo catalogue.
+
+    Returns raw values exactly as stored in the file -- comoving/little-h
+    unit conversion is applied centrally by HaloTools.standardise_names(),
+    not here (see its comoving/little_h parameters). Note this reader
+    doesn't currently parse HubbleParam/redshift from the file, so that
+    conversion can't do anything for AHF yet regardless of what's requested.
 
     Parameters
     ----------
     filename : str
         Path to the `.AHF_halos` file.
-    comoving : bool, optional
-        Convert positions to comoving coordinates.
 
     Returns
     -------
@@ -56,9 +60,6 @@ def read_ahf(filename: str, comoving: bool = False) -> Tuple[Dict[str, Any], Dic
         subhalos["Vel"] = subdata[:, 8:11]
         subhalos["Rvir"] = subdata[:, 11]
         metadata["Nsubhalos"] = len(subdata)
-
-    if comoving and "Pos" in halos:
-        halos["Pos"] *= 1.0  # placeholder for unit conversion
 
     return metadata, halos, subhalos
 
