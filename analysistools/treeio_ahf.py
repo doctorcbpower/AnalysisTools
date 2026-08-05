@@ -53,15 +53,15 @@ class AHFTreeData:
     snapnum_id_multiplier: Optional[int]
 
 
-def read_ahf_mergertree(filename: str, comoving: bool = False,
+def read_ahf_mergertree(filename: str,
                          snapnum_id_multiplier: Optional[int] = DEFAULT_AHF_SNAPNUM_ID_MULTIPLIER,
                          logger=None) -> AHFTreeData:
     """
     Read an AHF MergerTree link file into an AHFTreeData container.
 
-    `comoving` is accepted only for interface uniformity with the other
-    tree readers; it has no effect here, since AHF MergerTree link files
-    carry no physical (position/mass/velocity) properties of their own.
+    No comoving/little_h conversion here (unlike the other tree readers) --
+    AHF MergerTree link files carry no physical (position/mass/velocity)
+    properties of their own to convert.
     """
     with open(filename) as fh:
         next(fh); next(fh); next(fh)

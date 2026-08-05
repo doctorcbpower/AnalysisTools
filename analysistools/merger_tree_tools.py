@@ -101,6 +101,32 @@ RAW_ID_FIELD = {
 # set to None if your AHF IDs already come as plain (snapnum, id) pairs.
 AHF_SNAPNUM_ID_MULTIPLIER: Optional[int] = 10**12
 
+# Whether each tree format's *raw*, on-disk length/mass values already
+# include the little-h factor (Mpc/h-family, 1e10 Msun/h-family) or have it
+# factored out -- mirrors halo_tools.NATIVE_INCLUDES_LITTLE_H, with the same
+# caveat: SubFind-HBT is fixed to GADGET/Arepo's own convention (True), but
+# TreeFrog (VELOCIraptor) inherits whatever convention its *source snapshot*
+# used -- this default is only a common-case guess. Verify against your own
+# tree file (or its source snapshot) and pass native_includes_h= to
+# MergerTreeTools if it's wrong for your data. AHF carries no properties of
+# its own, so this is moot for "MergerTree".
+TREE_NATIVE_INCLUDES_LITTLE_H = {
+    "SubFind": True,
+    "TreeFrog": True,
+    "MergerTree": True,
+}
+
+# Whether each tree format's raw pos/vel are stored *comoving* (the general
+# simulation-output convention) or *physical*. SubFind-HBT is the one
+# exception: GADGET-4's HBT+ tree output stores SubhaloPos/SubhaloVel
+# physical, unlike the comoving convention its own group/subhalo catalogues
+# use -- this is a real, format-specific quirk, not a guess.
+TREE_NATIVE_IS_COMOVING = {
+    "SubFind": False,
+    "TreeFrog": True,
+    "MergerTree": True,
+}
+
 
 # ---------------------------------------------------------------------
 # Main user-facing class
@@ -111,14 +137,46 @@ class MergerTreeTools:
     Unified high-level interface to load a merger tree and extract/plot
     HaloTrack objects for individual halos or subhalos.
 
+    Two independent unit axes, both applied once in read_tree() (raw values
+    would otherwise be exactly as stored in the file -- but unlike HaloTools,
+    there's no separate standardise=True gate here, since tree data has no
+    raw/unstandardised representation worth keeping around):
+
+    - comoving vs physical (scale factor 'a'): comoving=True (default)
+      ensures pos/vel are comoving; comoving=False converts to physical.
+      Whether that's a no-op or a real conversion depends on the *format's*
+      native convention (TREE_NATIVE_IS_COMOVING) -- TreeFrog/AHF store
+      comoving natively (matching group catalogues), but SubFind-HBT is a
+      genuine exception: GADGET-4's HBT+ tree output stores SubhaloPos/
+      SubhaloVel physical, not comoving.
+    - little-h (whether Mpc/h-family or Mpc-family): *not* the same axis as
+      the above -- see HaloTools' docstring for why the two must not be
+      conflated (the same mistake existed in this module's TreeFrog reader
+      until this was split out: a single flag multiplied pos by both
+      HubbleParam and 1/a in one expression). Whether little_h=True/False
+      requires dividing/multiplying by h depends on the format's native
+      convention (TREE_NATIVE_INCLUDES_LITTLE_H) -- and for TreeFrog
+      (VELOCIraptor) that's only a common-case guess, not a guarantee, for
+      the same reason as HaloTools.NATIVE_INCLUDES_LITTLE_H's VELOCIraptor
+      entry: pass native_includes_h= explicitly once you've verified your
+      tree file's actual convention.
+
     Parameters
     ----------
     treefilename : str
         Path to the tree file.
     treefileformat : str
         One of "SubFind", "TreeFrog", "MergerTree" (AHF).
-    comoving_units : bool
-        If True, positions/masses are converted to comoving units on read.
+    comoving : bool, optional
+        See above. Default True.
+    little_h : bool, optional
+        See above. Default False. No-ops (with a warning) if the tree
+        file's HubbleParam isn't available (currently: TreeFrog walkable
+        trees, which carry no HubbleParam at all; AHF, moot -- no
+        properties stored).
+    native_includes_h : bool, optional
+        Override TREE_NATIVE_INCLUDES_LITTLE_H's per-format guess. Strongly
+        recommended for TreeFrog -- see above.
     halo_tools : HaloTools, optional
         A linked catalogue reader, enabling `from_halo()` and (for AHF)
         per-snapshot property lookups.
@@ -130,7 +188,9 @@ class MergerTreeTools:
         self,
         treefilename: str,
         treefileformat: str,
-        comoving_units: bool = False,
+        comoving: bool = True,
+        little_h: bool = False,
+        native_includes_h: Optional[bool] = None,
         halo_tools: Optional["object"] = None,
         **kwargs,
     ):
@@ -140,7 +200,9 @@ class MergerTreeTools:
 
         self.treefilename = treefilename
         self.treefileformat = treefileformat
-        self.comoving_units = comoving_units
+        self.comoving = comoving
+        self.little_h = little_h
+        self.native_includes_h = native_includes_h
         self.halo_tools = halo_tools
 
         self.metadata: Dict[str, Any] = {}
@@ -168,11 +230,9 @@ class MergerTreeTools:
         if self._loaded:
             return
         if self.treefileformat == "SubFind":
-            self.data = read_subfind_hbt(
-                self.treefilename, comoving=self.comoving_units, logger=self.logger)
+            self.data = read_subfind_hbt(self.treefilename, logger=self.logger)
         elif self.treefileformat == "TreeFrog":
-            self.data = read_treefrog(
-                self.treefilename, comoving=self.comoving_units, logger=self.logger)
+            self.data = read_treefrog(self.treefilename, logger=self.logger)
         elif self.treefileformat == "MergerTree":
             self.data = read_ahf_mergertree(
                 self.treefilename, snapnum_id_multiplier=AHF_SNAPNUM_ID_MULTIPLIER,
@@ -180,9 +240,106 @@ class MergerTreeTools:
         else:
             raise MergerTreeError(f"Unhandled format '{self.treefileformat}'")
 
+        self._apply_unit_conventions()
+
         self.metadata = self.data.metadata
         self.BoxSize = getattr(self.data, "BoxSize", None)  # only SubFind-HBT carries this
         self._loaded = True
+
+    def _get_hubble_param(self) -> Optional[float]:
+        """Best-effort HubbleParam from self.data, or None if this format's
+        reader doesn't provide one (currently: TreeFrog walkable trees,
+        AHF)."""
+        h = getattr(self.data, "HubbleParam", None)
+        return float(h) if h else None
+
+    def _length_and_mass_h_factors(self) -> Tuple[float, float]:
+        """Combined little-h scalar factor for length- and mass-like
+        quantities (identical, since both scale as h^-1 under the standard
+        little-h convention) -- 1.0 for either if no conversion is needed
+        or possible."""
+        native_includes_h = (
+            self.native_includes_h if self.native_includes_h is not None
+            else TREE_NATIVE_INCLUDES_LITTLE_H.get(self.treefileformat, True))
+        if self.little_h == native_includes_h:
+            return 1.0, 1.0
+        h = self._get_hubble_param()
+        if not h:
+            self.logger.warning(
+                "little_h=%s requested but no HubbleParam is available for "
+                "this %s tree; pos/mass/BoxSize left as-is.",
+                self.little_h, self.treefileformat)
+            return 1.0, 1.0
+        # native h-included -> h-free: divide. native h-free -> h-included:
+        # multiply. (Mpc/h = Mpc * h -- see docs/unified_interface.md.)
+        h_factor = (1.0 / h) if native_includes_h else h
+        return h_factor, h_factor
+
+    def _apply_unit_conventions(self) -> None:
+        """Apply the comoving (scale-factor) and little_h conversions to
+        self.data, in place -- see the comoving/little_h parameters in the
+        class docstring. Dispatches per format since SubFind-HBT (flat
+        arrays spanning all snapshots) and TreeFrog (per-snapshot-group
+        dicts) have different container shapes and different native
+        comoving conventions."""
+        if self.treefileformat == "SubFind":
+            self._apply_unit_conventions_subfind()
+        elif self.treefileformat == "TreeFrog":
+            self._apply_unit_conventions_treefrog()
+        # AHF ("MergerTree"): no properties stored, nothing to convert.
+
+    def _apply_unit_conventions_subfind(self) -> None:
+        d = self.data
+        length_h_factor, mass_h_factor = self._length_and_mass_h_factors()
+
+        native_is_comoving = TREE_NATIVE_IS_COMOVING.get(self.treefileformat, True)
+        a_row = np.asarray(d.Time)[np.asarray(d.SnapNum)]  # per-row scale factor
+        if native_is_comoving:
+            # raw is comoving; comoving=False converts to physical (*a)
+            a_length = a_row if not self.comoving else 1.0
+            a_vel = np.sqrt(a_row) if not self.comoving else 1.0
+        else:
+            # raw is physical (SubFind-HBT); comoving=True (default)
+            # converts to comoving (/a)
+            a_length = (1.0 / a_row) if self.comoving else 1.0
+            a_vel = (1.0 / np.sqrt(a_row)) if self.comoving else 1.0
+
+        length_factor = a_length * length_h_factor
+        if not np.isscalar(length_factor) or length_factor != 1.0:
+            d.SubhaloPos = d.SubhaloPos * np.atleast_1d(length_factor)[:, None]
+            if d.GrpR200 is not None:
+                d.GrpR200 = d.GrpR200 * length_factor
+        if not np.isscalar(a_vel) or a_vel != 1.0:
+            d.SubhaloVel = d.SubhaloVel * np.atleast_1d(a_vel)[:, None]
+        if mass_h_factor != 1.0:
+            d.SubhaloMass = d.SubhaloMass * mass_h_factor
+            d.GrpM200 = d.GrpM200 * mass_h_factor
+        # BoxSize is a single global constant, not resolved per-snapshot --
+        # only the (globally uniform) little-h factor applies to it, not the
+        # per-row scale factor.
+        if d.BoxSize is not None and length_h_factor != 1.0:
+            d.BoxSize = d.BoxSize * length_h_factor
+
+    def _apply_unit_conventions_treefrog(self) -> None:
+        d = self.data
+        if not hasattr(d, "SubhaloPos"):
+            return  # walkable tree: topology only, nothing to convert
+
+        length_h_factor, mass_h_factor = self._length_and_mass_h_factors()
+        native_is_comoving = TREE_NATIVE_IS_COMOVING.get(self.treefileformat, True)
+
+        for group, snapnum in d.snap_of_group.items():
+            a = d.Time[snapnum]
+            if native_is_comoving:
+                a_factor = 1.0 if self.comoving else a
+            else:
+                a_factor = (1.0 / a) if self.comoving else 1.0
+            length_factor = a_factor * length_h_factor
+
+            if length_factor != 1.0:
+                d.SubhaloPos[group] = d.SubhaloPos[group] * length_factor
+            if mass_h_factor != 1.0:
+                d.SubhaloMass[group] = d.SubhaloMass[group] * mass_h_factor
 
     # ------------------------------------------------------------------
     # Main-branch walk -> HaloTrack (dispatch to treeio_*.py)

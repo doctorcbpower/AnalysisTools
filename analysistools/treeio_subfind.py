@@ -60,8 +60,16 @@ class SubFindTreeData:
     lookup: Dict[Tuple[int, int], int]
 
 
-def read_subfind_hbt(filename: str, comoving: bool = False, logger=None) -> SubFindTreeData:
-    """Read a SubFind-HBT tree file into a SubFindTreeData container."""
+def read_subfind_hbt(filename: str, logger=None) -> SubFindTreeData:
+    """Read a SubFind-HBT tree file into a SubFindTreeData container.
+
+    Returns raw values exactly as stored in the file -- comoving/little-h
+    unit conversion is applied centrally by
+    MergerTreeTools._apply_unit_conventions(), not here. Note SubFind-HBT's
+    own native convention stores SubhaloPos/SubhaloVel *physical*, unlike
+    the comoving convention group/subhalo catalogues normally use -- see
+    MergerTreeTools.TREE_NATIVE_IS_COMOVING.
+    """
     with h5py.File(filename, "r") as f:
         header = dict(f["Header"].attrs.items())
         if "Ntrees_Total" not in header:
@@ -103,13 +111,6 @@ def read_subfind_hbt(filename: str, comoving: bool = False, logger=None) -> SubF
         TreeMainProgenitor = f["TreeHalos/TreeMainProgenitor"][()]
         TreeFirstHaloInFOFgroup = f["TreeHalos/TreeFirstHaloInFOFgroup"][()]
         TreeNextHaloInFOFgroup = f["TreeHalos/TreeNextHaloInFOFgroup"][()]
-
-        if comoving:
-            a = Time[SnapNum]
-            SubhaloPos = SubhaloPos / a[:, None]
-            SubhaloVel = SubhaloVel / np.sqrt(a)[:, None]
-            if GrpR200 is not None:
-                GrpR200 = GrpR200 / a
 
     # index lookup: (snapnum, subhalo id) -> array index. O(N) to build,
     # O(1) per lookup thereafter -- replaces repeated np.where chains.

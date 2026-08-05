@@ -73,6 +73,16 @@ class MergerTree:
         dict {snapnum: either} (walkable TreeFrog trees store topology
         only, so properties come from these catalogues).
     comoving : bool, optional
+        Scale-factor axis, default True (ensure comoving). Independent of
+        little_h below -- see MergerTreeTools' docstring for why the two
+        must not be conflated, and for TreeFrog/SubFind-HBT's differing
+        native conventions.
+    little_h : bool, optional
+        Little-h axis, default False (ensure h-free). See
+        MergerTreeTools' docstring -- for TreeFrog in particular, pass
+        native_includes_h= (via **backend_kwargs) once you've verified your
+        tree file's actual convention, rather than trusting the default
+        guess.
     label : str, optional
 
     Examples
@@ -87,12 +97,13 @@ class MergerTree:
     kind = "tree"
 
     def __init__(self, path: str, fileformat: str = "TreeFrog",
-                 halos=None, comoving: bool = False,
+                 halos=None, comoving: bool = True, little_h: bool = False,
                  label: Optional[str] = None, **backend_kwargs):
         self.path = path
         self.fileformat = fileformat
         self.label = label or path.rsplit("/", 1)[-1]
         self._comoving = comoving
+        self._little_h = little_h
         self._backend_kwargs = backend_kwargs
         self._halos = halos
         self._backend: Optional[MergerTreeTools] = None
@@ -114,7 +125,7 @@ class MergerTree:
             kwargs.setdefault("loglevel", 30)
             self._backend = MergerTreeTools(
                 self.path, treefileformat=self.fileformat,
-                comoving_units=self._comoving,
+                comoving=self._comoving, little_h=self._little_h,
                 halo_tools=self._halo_link(), **kwargs)
         return self._backend
 

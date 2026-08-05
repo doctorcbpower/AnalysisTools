@@ -109,7 +109,7 @@ def _read_treefrog_walkable(f, header, logger=None) -> TreeFrogWalkableData:
     )
 
 
-def read_treefrog(filename: str, comoving: bool = False, logger=None):
+def read_treefrog(filename: str, logger=None):
     """Read a TreeFrog tree file.
 
     Handles both flavours:
@@ -117,6 +117,10 @@ def read_treefrog(filename: str, comoving: bool = False, logger=None):
       -> TreeFrogTreeData;
     * walkable tree (topology-only groups under 'Snapshots/')
       -> TreeFrogWalkableData.
+
+    Returns raw values exactly as stored in the file -- comoving/little-h
+    unit conversion is applied centrally by
+    MergerTreeTools._apply_unit_conventions(), not here.
     """
     with h5py.File(filename, "r") as f:
         header = dict(f["Header"].attrs.items())
@@ -161,10 +165,6 @@ def read_treefrog(filename: str, comoving: bool = False, logger=None):
             vel = np.array([f[group]["VXc"][()],
                              f[group]["VYc"][()],
                              f[group]["VZc"][()]]).T
-
-            if comoving:
-                pos = pos * HubbleParam / a
-                mass = mass * HubbleParam
 
             SubhaloMass[group] = mass
             SubhaloPos[group] = pos
