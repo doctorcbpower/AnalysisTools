@@ -53,11 +53,7 @@ class ProfileTools:
     """
 
     def __init__(self,**kwargs):
-        self.comoving_units=True
-        # Use comoving or physical units when plotting?
-        if 'comoving_units' in kwargs:    
-            self.comoving_units=kwargs.get('comoving_units')
-        self.fr_cut=5             
+        self.fr_cut=5
         # Size of region in units of R200
         if 'fr_cut' in kwargs:
             self.radius_cut=kwargs.get('fr_cut')
@@ -333,10 +329,6 @@ class ProfileTools:
 
 class MassFunctionTools:
     def __init__(self,**kwargs):
-        self.comoving_units=True
-        # Use comoving or physical units when plotting?
-        if 'comoving_units' in kwargs:
-            self.comoving_units=kwargs.get('comoving_units')
         self.numbins=25
         # Number of bins to plot
         if 'numbins' in kwargs:
