@@ -23,6 +23,11 @@ needs_data = pytest.mark.skipif(not have_data, reason="example data missing")
 
 
 def make_sim(**extra):
+    # native_includes_h=False: this bundled VELOCIraptor catalogue was run
+    # against the SWIFT snapshot above and inherits its h-free convention,
+    # not the h-included default HaloCatalogue otherwise guesses for
+    # VELOCIraptor -- see docs/unified_interface.md#units-comoving-vs-physical-and-little-h.
+    extra.setdefault("load_kwargs", {"halos": {"native_includes_h": False}})
     return at.Simulation(
         snapshots={0.0: SNAP},
         halos={0.0: VRCAT},
@@ -75,7 +80,7 @@ def test_simulation_nearest_redshift():
 
 @needs_data
 def test_prebuilt_components_accepted():
-    cat = at.load(VRCAT, snapnum=31)
+    cat = at.load(VRCAT, snapnum=31, native_includes_h=False)
     sim = at.Simulation(halos=cat, label="prebuilt")
     assert sim.at(0.0).halos is cat
 
@@ -126,7 +131,7 @@ def test_particles_in_halo_groupid_unavailable():
 
 @pytest.fixture
 def sim_with_galaxies(tmp_path):
-    cat = at.load(VRCAT, snapnum=31)
+    cat = at.load(VRCAT, snapnum=31, native_includes_h=False)
     n_halos = 5
     per_halo = 4
     rng = np.random.default_rng(1)

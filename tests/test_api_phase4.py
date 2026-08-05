@@ -30,7 +30,11 @@ def snap():
 
 @pytest.fixture(scope="module")
 def halos():
-    return at.load(VRCAT, snapnum=31)
+    # native_includes_h=False: this bundled VELOCIraptor catalogue was run
+    # against the SWIFT snapshot above and inherits its h-free convention,
+    # not the h-included default HaloCatalogue otherwise guesses for
+    # VELOCIraptor -- see docs/unified_interface.md#units-comoving-vs-physical-and-little-h.
+    return at.load(VRCAT, snapnum=31, native_includes_h=False)
 
 
 # ---------------------------------------------------------------------------
