@@ -184,28 +184,28 @@ class SnapshotData:
             raise RuntimeError("No data loaded or missing cosmological parameters")
         
         if kwargs.get('convert_to_physical'):
-            self.pos *= self.ScaleFactor
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize *= self.ScaleFactor
-        
+            self.pos *= self.scale_factor
+            if hasattr(self, 'box_size'):
+                self.box_size *= self.scale_factor
+
         if kwargs.get('convert_to_comoving'):
-            self.pos /= self.ScaleFactor
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize /= self.ScaleFactor
-        
+            self.pos /= self.scale_factor
+            if hasattr(self, 'box_size'):
+                self.box_size /= self.scale_factor
+
         if kwargs.get('convert_to_per_littleh'):
-            self.pos *= self.HubbleParam
+            self.pos *= self.hubble_param
             if hasattr(self, 'mass'):
-                self.mass *= self.HubbleParam
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize *= self.HubbleParam
-        
+                self.mass *= self.hubble_param
+            if hasattr(self, 'box_size'):
+                self.box_size *= self.hubble_param
+
         if kwargs.get('convert_to_littleh'):
-            self.pos /= self.HubbleParam
+            self.pos /= self.hubble_param
             if hasattr(self, 'mass'):
-                self.mass /= self.HubbleParam
-            if hasattr(self, 'BoxSize'):
-                self.BoxSize /= self.HubbleParam    
+                self.mass /= self.hubble_param
+            if hasattr(self, 'box_size'):
+                self.box_size /= self.hubble_param
 class SnapshotTools:
     """
     Handle cosmological simulation snapshots (HDF5 or GADGET binary).

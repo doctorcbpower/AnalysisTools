@@ -1,6 +1,6 @@
 # Snapshots
 
-Covers `SnapshotTools` (read/write/select/split particle snapshots) and `ICTools` (build initial conditions). See also [unified_interface.md](unified_interface.md) for the higher-level `Dataset` API these sit underneath.
+Covers `SnapshotTools` (read/write/select/split particle snapshots) and `ICTools` (build initial conditions). See also [unified_interface.md](unified_interface.md) for the higher-level `Dataset` API these sit underneath, including `SnapshotDataset`'s `comoving` kwarg (little-*h* handling) and metadata access.
 
 ## 1. Load and Read a Snapshot
 

@@ -56,4 +56,4 @@ HaloTools(
 
 Supported `fileformat` values for `read_catalogue`: `"SUBFIND"`, `"AHF"`, `"VELOCIraptor"`, `"SWIFT_FOF"` (or integer codes 1-4).
 
-See also: [merger_trees.md](merger_trees.md) for walking trees built on top of these catalogues, and [unified_interface.md](unified_interface.md) for the `Dataset`-based API.
+See also: [merger_trees.md](merger_trees.md) for walking trees built on top of these catalogues, and [unified_interface.md](unified_interface.md) for the `Dataset`-based API, including the `comoving` kwarg's little-*h* semantics (shared with `SnapshotDataset`) and metadata access.

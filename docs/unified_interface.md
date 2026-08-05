@@ -57,4 +57,33 @@ track = epoch.track_of(index=0)                   # catalogue auto-linked
 
 Everything is lazy (no I/O until first field access), metadata is uniform (`ds.meta["redshift"]`, `["boxsize"]`, `["h0"]`), and the underlying legacy object stays reachable via `ds.backend`. The per-class API documented in the other `docs/` pages is unchanged and fully supported — the unified interface is a layer on top of it.
 
+## Units: little-h
+
+Both `SnapshotDataset` and `HaloCatalogue` take a `comoving` kwarg (default `True` on both) that controls whether the little-*h* factor is stripped from length/mass fields:
+
+```python
+snap  = at.load("snap_0031.hdf5", comoving=True)                       # pos, mass, boxsize / h0
+halos = at.load("halos.VELOCIraptor.properties.0", fileformat="VELOCIraptor", comoving=True)  # pos / h0
+```
+
+With the defaults, both come back with the little-*h* factor already divided out, so `snap["pos"]` and `halos["pos"]` are directly comparable. Pass `comoving=False` on either (or both) to get values exactly as stored in the file instead (typically h⁻¹ code units for GADGET/Arepo/SWIFT snapshots and h⁻¹ Mpc for halo catalogues) -- set both adapters the same way rather than mixing, or particle/halo positions will be off by a factor of `h0`. Check `ds.meta["comoving"]` (snapshots) if you need to confirm which state a given `Dataset` ended up in.
+
+This only affects `pos`/`mass`/`boxsize`; it does not touch the separate comoving-vs-physical (scale factor) axis -- see `SnapshotTools.UnitConversion`'s `convert_to_physical`/`convert_to_comoving` in [snapshots.md](snapshots.md) for that.
+
+## Accessing metadata / header info
+
+Every `Dataset` (`SnapshotDataset`, `HaloCatalogue`, `MergerTree`/`TrackDataset`, `GalaxyCatalogue`, ...) exposes `ds.meta` -- a plain dict, populated on first field access (or call `ds.preload()` to force it without touching any column). Common keys: `redshift`, `boxsize`, `h0`, `scale_factor`, `units`. `ds.summary()` prints those plus row count and available fields.
+
+```python
+snap = at.load("snap_0031.hdf5").preload()
+snap.meta["redshift"], snap.meta["h0"], snap.meta["boxsize"]
+snap.summary()
+```
+
+Both `HaloCatalogue` and `SnapshotDataset` also keep a raw header/config dict at `ds.meta["native_meta"]`, for fields that don't have a standardised `meta` key -- e.g. `omega_dm`/`omega_bar` (SWIFT-only split of `omega_0`), `mass_table`, `dimension`, `num_files`, `ispotential`/`isgroupid`. For `SnapshotDataset` this is always the raw, un-h-stripped value regardless of the `comoving` setting -- only the standardised top-level keys (`pos`, `mass`, `boxsize`) get the little-*h* conversion.
+
+```python
+snap.meta["native_meta"]["omega_dm"], snap.meta["native_meta"]["mass_table"]
+```
+
 See also: [snapshots.md](snapshots.md), [halo_catalogues.md](halo_catalogues.md), [merger_trees.md](merger_trees.md), [shark.md](shark.md).
