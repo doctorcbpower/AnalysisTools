@@ -19,6 +19,26 @@ ht.summary()
 
 `standardise=True` runs `halo_tools_standardise_names.standardise_catalogue_names`, mapping native per-format fields onto a common schema: `mass`, `pos`, `vel`, `radius`, `halo_id`, `num_part`.
 
+## Centring SUBFIND groups on their primary subhalo
+
+By default, a SUBFIND group's `pos`/`vel` are `GroupPos`/`GroupVel` -- the FOF group's own centre, which substructure can offset from where the halo actually is. Pass `centre_on_subhalo=True` to use the group's primary subhalo instead (`GroupFirstSub` -> `SubhaloPos`/`SubhaloVel`), which is usually the better proxy for the halo centre:
+
+```python
+ht = HaloTools(comoving_units=True, centre_on_subhalo=True)
+halos = ht.read_catalogue(
+    filename="groups_010.hdf5", fileformat="SUBFIND", standardise=True,
+)
+
+halos["pos"]                 # primary-subhalo position where available
+halos["centred_on_subhalo"]  # bool per group: False where GroupFirstSub was
+                              # invalid (no bound subhalo) and GroupPos/GroupVel
+                              # were kept instead
+```
+
+Only applies to SUBFIND catalogues with a Subhalo table; other formats ignore the flag. `vel` is substituted from `SubhaloVel` too when present, but that's SubFind's own subhalo bulk velocity -- not a self-consistent recomputation from bound particles -- so treat it as an approximation rather than a definitive centre-of-mass velocity.
+
+Works the same way through the unified interface: `HaloCatalogue(path, fileformat="SUBFIND", centre_on_subhalo=True)` or `at.load(path, fileformat="SUBFIND", centre_on_subhalo=True)` (see [unified_interface.md](unified_interface.md)).
+
 ## Multi-snapshot access with `HaloModel`
 
 `HaloModel` gives lazy, cached access to a halo catalogue across many snapshots/redshifts, with derived-quantity accessors:
@@ -48,6 +68,7 @@ pos  = hm.position(redshift=0.0)
 ```python
 HaloTools(
     comoving_units = False,
+    centre_on_subhalo = False,   # SUBFIND only, see above
     usehalocatonly = False,
     usesubstructure_file = False,
     loglevel = logging.INFO,

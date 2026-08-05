@@ -38,16 +38,35 @@ class HaloTools:
     """
     Unified high-level interface to load and inspect halo catalogues.
 
+    Parameters
+    ----------
+    comoving_units : bool, optional
+        See individual reader docstrings (divides positions by HubbleParam).
+    centre_on_subhalo : bool, optional
+        SUBFIND only. If True, standardise_names() replaces each group's
+        'pos' (and 'vel', if present) with its primary subhalo's
+        SubhaloPos/SubhaloVel (looked up via GroupFirstSub) instead of
+        GroupPos/GroupVel -- the FOF group centre can be offset from the
+        actual halo centre by substructure, so the primary subhalo's
+        position is usually the better proxy. Groups with no identified
+        subhalo (GroupFirstSub invalid) keep GroupPos/GroupVel. Adds a
+        'centred_on_subhalo' bool column recording which groups were
+        actually re-centred. SubhaloVel is SubFind's own subhalo bulk
+        velocity, not a self-consistent recomputation from bound
+        particles -- treat the velocity substitution as an approximation.
+
     Examples
     --------
-    >>> ht = HaloTools(comoving_units=True)
-    >>> halos = ht.read_catalogue(filename="groups_010.hdf5",fileformat="SubFind")
+    >>> ht = HaloTools(comoving_units=True, centre_on_subhalo=True)
+    >>> halos = ht.read_catalogue(filename="groups_010.hdf5",fileformat="SubFind",
+    ...                            standardise=True)
     >>> ht.summary()
     """
 
     def __init__(
         self,
         comoving_units: bool = False,
+        centre_on_subhalo: bool = False,
         **kwargs,
     ):
         self.fmtmap = {
@@ -64,6 +83,7 @@ class HaloTools:
         }
 
         self.comoving_units = comoving_units
+        self.centre_on_subhalo = centre_on_subhalo
         self.metadata: Dict[str, Any] = {}
         self.halos: Optional[Dict[str, np.ndarray]] = None
         self.subhalos: Optional[Dict[str, np.ndarray]] = None
@@ -155,6 +175,53 @@ class HaloTools:
                 self.subhalos, self.halocatfileformat, object_type="Subhalo", logger=self.logger)
         else:
             self.standardised_subhalos = None
+
+        if (self.centre_on_subhalo and self.halocatfileformat == "SUBFIND"
+                and self.standardised_halos is not None
+                and self.standardised_subhalos is not None):
+            self._centre_on_first_subhalo()
+
+    def _centre_on_first_subhalo(self) -> None:
+        """Re-centre self.standardised_halos on each group's primary
+        subhalo (GroupFirstSub -> SubhaloPos/SubhaloVel). See
+        centre_on_subhalo in the class docstring."""
+        halos = self.standardised_halos
+        subs = self.standardised_subhalos
+
+        first_sub = halos.get("GroupFirstSub")
+        if first_sub is None:
+            self.logger.warning(
+                "centre_on_subhalo requested but 'GroupFirstSub' is not "
+                "present in this SUBFIND catalogue; leaving GroupPos/GroupVel "
+                "as-is.")
+            return
+
+        # Upcast before comparing so both sentinel conventions are caught:
+        # signed -1, or (for an unsigned dtype, which can't hold -1) a huge
+        # positive fill value -- both fail one of the two bounds below.
+        first_sub = np.asarray(first_sub).astype(np.int64)
+        n_sub = len(subs["pos"]) if subs.get("pos") is not None else 0
+        valid = (first_sub >= 0) & (first_sub < n_sub)
+
+        did_pos = did_vel = False
+        if halos.get("pos") is not None and subs.get("pos") is not None:
+            new_pos = halos["pos"].copy()
+            new_pos[valid] = subs["pos"][first_sub[valid]]
+            halos["pos"] = new_pos
+            did_pos = True
+
+        if halos.get("vel") is not None and subs.get("vel") is not None:
+            new_vel = halos["vel"].copy()
+            new_vel[valid] = subs["vel"][first_sub[valid]]
+            halos["vel"] = new_vel
+            did_vel = True
+
+        halos["centred_on_subhalo"] = valid
+        self.logger.info(
+            f"Re-centred {int(valid.sum()):,}/{len(valid):,} groups on their "
+            f"primary subhalo's "
+            f"{'position and velocity' if did_vel else 'position' if did_pos else '(nothing -- no pos/vel to replace)'}"
+            f"; the rest kept GroupPos/GroupVel (no valid GroupFirstSub).")
 
     def summary(self) -> None:
         """Print a concise summary of loaded halo catalogue."""

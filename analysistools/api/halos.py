@@ -35,6 +35,11 @@ class HaloCatalogue(Dataset):
         Recorded for merger-tree lookups (MergerTreeTools.from_halo).
     label : str, optional
         Name for plot legends.
+    **backend_kwargs :
+        Any further HaloTools constructor options, e.g. centre_on_subhalo=True
+        (SUBFIND only: use each group's primary subhalo -- GroupFirstSub ->
+        SubhaloPos/SubhaloVel -- as its 'pos'/'vel' instead of GroupPos/
+        GroupVel; see HaloTools' docstring).
 
     Examples
     --------
@@ -43,6 +48,9 @@ class HaloCatalogue(Dataset):
     >>> cat["mass"], cat["pos"]
     >>> massive = cat.select(mass=(1e3, None))
     >>> cat.subhalos["mass"]
+    >>> sf = HaloCatalogue("groups_010.hdf5", fileformat="SUBFIND",
+    ...                    centre_on_subhalo=True)
+    >>> sf["centred_on_subhalo"]   # False where a group had no bound subhalo
     """
 
     kind = "halos"
