@@ -147,23 +147,71 @@ class SharkGalaxyBackend:
         return props
 
 
+def _cosmic_time_gyr(a, h0: float, omega_m: float, omega_lambda: float):
+    """Age of a flat LambdaCDM universe at scale factor `a`, in Gyr.
+
+    Standard analytic closed form, t(a) = (2 / (3 H0 sqrt(OL))) *
+    asinh(sqrt(OL/Om) * a^1.5). Ignores radiation -- an excellent
+    approximation for a > ~0.01 (z < ~100), far beyond anything relevant to
+    stellar ages. Assumes flat curvature, matching essentially every
+    cosmological simulation's own initial conditions.
+    """
+    hubble_time_gyr = 9.7779 / h0  # 1/H0 in Gyr, for H0 = 100 h km/s/Mpc
+    return (2.0 / (3.0 * np.sqrt(omega_lambda))
+           * np.arcsinh(np.sqrt(omega_lambda / omega_m) * np.asarray(a) ** 1.5)
+           * hubble_time_gyr)
+
+
 class HydroGalaxyBackend:
-    """Galaxy properties synthesised from star particles in a
-    hydrodynamic snapshot, matched to the halo via
+    """Galaxy properties synthesised from star particles in a hydrodynamic
+    snapshot, matched to the halo via
     ``Epoch.particles_in_halo(species="star", ...)``.
 
-    Aggregation recipes (to implement in Phase 6b) should target the exact
-    same field names as SharkGalaxyBackend so a hydro catalogue is
-    schema-identical wherever the physics is comparable:
+    Fields returned (matching ``SharkGalaxyBackend``'s field names so a
+    hydro catalogue is schema-identical wherever the physics is
+    comparable), and how each is computed:
 
-    - StellarMass       <- sum of star particle masses
-    - MetallicityStellar <- mass-weighted mean of particle metallicity
-    - MeanStellarAge     <- mass-weighted mean of (snapshot time - particle
-                             formation time)
-    - StarFormationRate  <- mass formed in young (< age threshold)
-                             particles / threshold time window
-    - HalfLightRadius / HalfMassRadiusStellar <- computed directly from
-                             particle positions relative to the halo centre
+    - ``StellarMass``: sum of star particle ``mass`` (current bound mass,
+      not initial mass -- accounts for stellar mass loss).
+    - ``MetallicityStellar``: mass-weighted mean of ``stellar_Z``.
+    - ``MeanStellarAge``: mass-weighted mean of (age at this epoch - age at
+      formation), both converted from ``age`` (``StellarFormationTime``,
+      a scale factor, per docs/snapshots.md) to cosmic time via
+      ``_cosmic_time_gyr`` -- needs ``h0``/``omega_0``/``omega_lambda``/
+      ``scale_factor`` on the matched particles' ``.meta``; omitted if any
+      are unavailable, not silently skipped-with-wrong-units.
+    - ``StarFormationRate``: (``initmass`` if available, else current
+      ``mass``, of particles younger than ``young_star_age_threshold``,
+      summed) / (``young_star_age_threshold`` converted Gyr -> yr).
+      ``young_star_age_threshold`` is in Gyr (default 0.1 = 100 Myr, a
+      standard window for this kind of "instantaneous" SFR estimate) --
+      genuinely 0.0 (not omitted) when there are resolved ages but none
+      young enough.
+    - ``HalfMassRadiusStellar``: radius from the halo centre
+      (``epoch.halos["pos"][halo_row]``) enclosing half the total star
+      particle mass -- a direct geometric measurement, no assumed profile.
+
+    Returns ``{}`` (per the ``GalaxyBackend`` protocol) when no star
+    particles are found (e.g. a DMO snapshot, or an empty halo) or when
+    ``mass`` isn't resolvable on them at all.
+
+    Units caveat (same as ``SharkGalaxyBackend``/``pipeline.
+    HaloExtractStage``): values are returned exactly as the matched
+    ``SnapshotDataset`` view provides them (whatever comoving/little_h
+    state the Epoch's snapshot was configured with), not necessarily
+    schema.py's declared units. Unit reconciliation isn't implemented
+    anywhere in this pipeline yet.
+
+    Deliberately **not** returned, documented rather than guessed:
+    ``HalfLightRadius``/luminosity/magnitude fields -- need a stellar
+    population synthesis model (mass + age + metallicity -> luminosity),
+    which nothing in this codebase provides for particle data (unlike
+    SHARK, which computes luminosities itself when its own photometry
+    pipeline is run). ``GasMass_Cold``/``GasMass_Hot``/``BlackHoleMass``
+    would need gas-temperature and black-hole particle aggregation
+    respectively -- out of scope for a star-particle-only backend as
+    originally scoped here; add a similar aggregation over
+    ``species="gas"``/``"bh"`` if you need them.
     """
 
     name = "hydro"
@@ -174,11 +222,60 @@ class HydroGalaxyBackend:
         self.young_star_age_threshold = young_star_age_threshold
 
     def galaxy_properties(self, epoch, halo_row: int) -> Dict[str, Any]:
-        raise NotImplementedError(
-            "Phase 6b: epoch.particles_in_halo(index=halo_row, "
-            "species='star', r_scale=self.r_scale) -> aggregate into the "
-            "same GalaxyProperties field names as SharkGalaxyBackend."
-        )
+        from ..merger_tree_types import periodic_delta
+
+        stars = epoch.particles_in_halo(index=halo_row, r_scale=self.r_scale,
+                                        species="star")
+        if len(stars) == 0 or "mass" not in stars:
+            return {}
+
+        mass = np.asarray(stars["mass"])
+        total_mass = float(np.sum(mass))
+
+        props: Dict[str, Any] = {}
+        if total_mass <= 0:
+            return props
+        props["StellarMass"] = total_mass
+
+        if "stellar_Z" in stars:
+            metallicity = np.asarray(stars["stellar_Z"])
+            props["MetallicityStellar"] = float(
+                np.average(metallicity, weights=mass))
+
+        h0 = stars.meta.get("h0")
+        omega_m = stars.meta.get("omega_0")
+        omega_lambda = stars.meta.get("omega_lambda")
+        a_now = stars.meta.get("scale_factor")
+        have_cosmology = None not in (h0, omega_m, omega_lambda, a_now)
+
+        if "age" in stars and have_cosmology:
+            a_form = np.asarray(stars["age"])
+            t_form = _cosmic_time_gyr(a_form, h0, omega_m, omega_lambda)
+            t_now = _cosmic_time_gyr(a_now, h0, omega_m, omega_lambda)
+            age_gyr = t_now - t_form
+            props["MeanStellarAge"] = float(np.average(age_gyr, weights=mass))
+
+            formation_mass = (np.asarray(stars["initmass"])
+                              if "initmass" in stars else mass)
+            young = age_gyr < self.young_star_age_threshold
+            if np.any(young):
+                window_yr = self.young_star_age_threshold * 1.0e9
+                props["StarFormationRate"] = \
+                    float(np.sum(formation_mass[young])) / window_yr
+            else:
+                props["StarFormationRate"] = 0.0
+
+        centre = np.asarray(epoch.halos["pos"])[halo_row]
+        pos = np.asarray(stars["pos"])
+        d = periodic_delta(pos - centre, epoch.boxsize)
+        distance = np.linalg.norm(d, axis=1)
+        order = np.argsort(distance)
+        cum_mass = np.cumsum(mass[order])
+        idx = min(int(np.searchsorted(cum_mass, total_mass / 2.0)),
+                  len(distance) - 1)
+        props["HalfMassRadiusStellar"] = float(distance[order][idx])
+
+        return props
 
 
 BACKENDS = {

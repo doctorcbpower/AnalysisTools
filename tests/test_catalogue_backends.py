@@ -2,9 +2,9 @@
 Tests for analysistools.catalogue.backends.
 
 Covers: get_backend() dispatch, kwargs passthrough, and the unknown-name
-error. SharkGalaxyBackend.galaxy_properties() is implemented (Phase 6b) and
-tested in test_catalogue_backends_shark.py; HydroGalaxyBackend's is still a
-Phase 6b stub, pinned here.
+error. Both backends' galaxy_properties() are implemented (Phase 6b) and
+tested separately: test_catalogue_backends_shark.py and
+test_catalogue_backends_hydro.py.
 """
 import pytest
 
@@ -48,9 +48,3 @@ def test_get_backend_passes_through_kwargs():
 def test_get_backend_unknown_name_raises():
     with pytest.raises(ValueError, match="Unknown galaxy_backend"):
         get_backend("not_a_real_backend")
-
-
-def test_hydro_galaxy_properties_not_yet_implemented():
-    backend = HydroGalaxyBackend()
-    with pytest.raises(NotImplementedError, match="Phase 6b"):
-        backend.galaxy_properties(epoch=None, halo_row=0)

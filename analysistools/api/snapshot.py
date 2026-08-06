@@ -23,6 +23,14 @@ from .dataset import Dataset
 SPECIES_TYPE_ATTR = {"gas": "gas_type", "dm": "dm_type",
                      "star": "star_type", "bh": "bh_type"}
 
+#: public column name -> raw SnapshotData attribute name, for the few
+#: fields where they differ (see the comment in _load() for why).
+_RAW_ATTR_ALIASES = {
+    "gas_Z": "gas_metallicity",
+    "stellar_Z": "stellar_metallicity",
+    "initmass": "stellarinitmass",
+}
+
 #: Whether each convention's *raw*, on-disk length/mass values already
 #: include the little-h factor (kpc/h-family, 1e10 Msol/h) or have it
 #: factored out (kpc-family, 1e10 Msol) -- a property of the simulation code,
@@ -126,8 +134,19 @@ class SnapshotDataset(Dataset):
         d = self._data
 
         for name in ("pos", "vel", "pids", "mass", "ptype", "potential",
-                     "rho", "u", "sfr", "age", "groupid", "hsml"):
+                     "rho", "u", "sfr", "age", "groupid", "hsml",
+                     "gas_Z", "stellar_Z", "initmass"):
+            # gas_Z/stellar_Z/initmass are the documented public names
+            # (docs/snapshots.md "Supported Data Blocks"), but the reader
+            # actually sets gas_metallicity/stellar_metallicity/
+            # stellarinitmass -- a separate pre-existing read/write naming
+            # mismatch (the *writer* checks for gas_Z/stellar_Z/initmass,
+            # which the reader never sets either) not fixed here, just
+            # worked around on the read side so these blocks are reachable
+            # at all through the unified interface.
             arr = getattr(d, name, None)
+            if arr is None:
+                arr = getattr(d, _RAW_ATTR_ALIASES.get(name, ""), None)
             if isinstance(arr, np.ndarray) and arr.ndim >= 1 and len(arr):
                 self._columns[name] = arr
 
