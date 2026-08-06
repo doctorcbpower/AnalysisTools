@@ -20,6 +20,7 @@ import logging
 
 import numpy as np
 
+from ..merger_tree_types import MergerTreeError, periodic_delta
 from .pipeline import PipelineStage
 
 logger = logging.getLogger(__name__)
@@ -136,17 +137,128 @@ class HaloPropertiesStage(PipelineStage):
 
 
 class OrbitalPropertiesStage(PipelineStage):
-    """Pericentre/apocentre/eccentricity/period/energy/angular momentum,
-    TidalTrackClass -- orbit-fitting against the tree's position/velocity
-    history relative to the host."""
+    """OrbitalPericentre/OrbitalApocentre/OrbitalEccentricity and
+    OrbitalAngularMomentum (at infall) -- computed from each satellite's
+    orbit relative to the host, via ``MergerTreeTools.analyse_orbit()``.
+
+    Needs the host's own tree track, which ``TreeExtractStage`` doesn't
+    produce (it only tracks satellites) -- built here directly from
+    ``(epoch, host_row)``, matching ``HaloExtractStage``'s convention of
+    taking host/satellite selection explicitly rather than guessing it.
+
+    "At infall" uses the satellite's own ``IsSubhalo``-based
+    ``HaloTrack.infall_snapshot()`` -- the same definition
+    ``HaloPropertiesStage`` uses -- rather than
+    ``OrbitAnalysis.first_crossing()``'s R200-based one. That's a deliberate
+    choice: the host's virial radius isn't reliably on the tree's `extra`
+    for every format (SubFind-HBT carries it as "GroupR200"; a TreeFrog
+    track built from a linked halo catalogue, as ``TreeExtractStage``
+    produces for the walkable-tree case, carries no radius field at all).
+
+    Deliberately **not** computed here -- each needs an assumed physical
+    model this pipeline doesn't specify anywhere, so guessing one would
+    silently bake in an unstated assumption:
+
+    - ``OrbitalEnergy``: needs a host potential model (point-mass? NFW?),
+      not just kinematics.
+    - ``OrbitalPeriod``: needs either a potential model, or multiple fully
+      resolved pericentre passages in the snapshot cadence, which isn't
+      guaranteed.
+    - ``TidalTrackClass``: needs a full tidal-tracks classification model
+      (e.g. Penarrubia et al. tables) -- a different kind of model
+      entirely, out of scope for orbit kinematics alone.
+
+    These three are left out of ``outputs``/uncomputed here; a future
+    stage (or this one, once a modelling choice is made and documented)
+    should add them rather than have this stage guess.
+    """
 
     name = "orbital_properties"
     inputs = ("MergerTrees/main_branch",)
     outputs = ("Satellites/HaloProperties/OrbitalPericentre",
-               "Satellites/HaloProperties/OrbitalApocentre")
+               "Satellites/HaloProperties/OrbitalApocentre",
+               "Satellites/HaloProperties/OrbitalEccentricity",
+               "Satellites/HaloProperties/OrbitalAngularMomentum")
+
+    def __init__(self, epoch, host_row: int):
+        self.epoch = epoch
+        self.host_row = int(host_row)
 
     def run(self, context):
-        raise NotImplementedError("Phase 6b.")
+        if self.epoch.tree is None:
+            raise RuntimeError(
+                f"Stage '{self.name}': this Epoch has no merger tree.")
+        try:
+            host_track = self.epoch.track_of(index=self.host_row).track
+        except MergerTreeError as exc:
+            raise RuntimeError(
+                f"Stage '{self.name}': host halo (row {self.host_row}) has "
+                f"no resolvable tree entry, so no satellite orbit can be "
+                f"computed relative to it.") from exc
+
+        analyse_orbit = self.epoch.tree.backend.analyse_orbit
+        boxsize = self.epoch.boxsize
+
+        main_branch = context.columns["MergerTrees/main_branch"]
+        n = len(main_branch)
+
+        pericentre = np.full(n, np.nan)
+        apocentre = np.full(n, np.nan)
+        eccentricity = np.full(n, np.nan)
+        angular_momentum = np.full((n, 3), np.nan)
+
+        n_no_track = n_no_overlap = 0
+        for i, track_ds in enumerate(main_branch):
+            if track_ds is None or len(track_ds.track) == 0:
+                n_no_track += 1
+                continue
+            track = track_ds.track
+
+            try:
+                orbit = analyse_orbit(track, host_track, boxsize=boxsize)
+            except MergerTreeError:
+                n_no_overlap += 1
+                continue
+
+            peri = float(np.min(orbit.Distance))
+            apo = float(np.max(orbit.Distance))
+            pericentre[i] = peri
+            apocentre[i] = apo
+            if (peri + apo) > 0:
+                eccentricity[i] = (apo - peri) / (apo + peri)
+
+            event = track.infall_snapshot()
+            if event is not None:
+                infall_snap = track.SnapNum[event["index"]]
+                match_self = np.flatnonzero(track.SnapNum == infall_snap)
+                match_host = np.flatnonzero(host_track.SnapNum == infall_snap)
+                if match_self.size and match_host.size:
+                    i_s, i_h = int(match_self[0]), int(match_host[0])
+                    dpos = periodic_delta(
+                        track.Pos[i_s] - host_track.Pos[i_h], boxsize)
+                    dvel = track.Vel[i_s] - host_track.Vel[i_h]
+                    angular_momentum[i] = np.cross(dpos, dvel)
+
+        if n_no_track or n_no_overlap:
+            logger.warning(
+                "%s: %d/%d satellites skipped (%d no resolved tree entry, "
+                "%d no snapshot overlap with the host's track).",
+                self.name, n_no_track + n_no_overlap, n, n_no_track,
+                n_no_overlap)
+
+        context.columns["Satellites/HaloProperties/OrbitalPericentre"] = \
+            pericentre
+        context.columns["Satellites/HaloProperties/OrbitalApocentre"] = \
+            apocentre
+        context.columns["Satellites/HaloProperties/OrbitalEccentricity"] = \
+            eccentricity
+        context.columns["Satellites/HaloProperties/OrbitalAngularMomentum"] = \
+            angular_momentum
+
+        context.record_stage(self.name, n_satellites=n,
+                             n_no_track=n_no_track,
+                             n_no_overlap=n_no_overlap)
+        return context
 
 
 class StarFormationHistoryStage(PipelineStage):
