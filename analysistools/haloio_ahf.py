@@ -42,8 +42,10 @@ def read_ahf(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict
     halos: Dict[str, np.ndarray] = {}
     subhalos: Dict[str, np.ndarray] = {}
 
-    # Read main halos
-    data = np.genfromtxt(filename, comments="#")
+    # Read main halos. ndmin=2 forces a 2-D array even for a single-row
+    # file (genfromtxt otherwise collapses it to 1-D, breaking the [:, col]
+    # indexing below).
+    data = np.genfromtxt(filename, comments="#", ndmin=2)
     halos["HaloID"] = data[:, 0].astype(np.int64)
     halos["HostHaloID"] = data[:, 1].astype(np.int64)
     halos["NumSubStruct"] = data[:, 2].astype(np.int64)
@@ -59,7 +61,7 @@ def read_ahf(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict
     # Read optional substructure file
     subfile = filename.replace(".AHF_halos", ".AHF_substructure")
     if os.path.exists(subfile):
-        subdata = np.genfromtxt(subfile, comments="#")
+        subdata = np.genfromtxt(subfile, comments="#", ndmin=2)
         subhalos["ParentHaloID"] = subdata[:, 0].astype(np.int64)
         subhalos["SubhaloMass"] = subdata[:, 1]
         subhalos["Pos"] = subdata[:, 5:8]
