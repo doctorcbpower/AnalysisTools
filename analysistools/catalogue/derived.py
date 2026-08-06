@@ -276,16 +276,106 @@ class StarFormationHistoryStage(PipelineStage):
 
 
 class EnvironmentStage(PipelineStage):
-    """LocalNumberDensity, DistanceToNearestMassiveNeighbour, TidalIndex,
-    CosmicWebClass, host isolation/pairing copy-through."""
+    """LocalNumberDensity, DistanceToNearestMassiveNeighbour -- computed
+    from the *other* halos in ``Epoch.halos`` (every row except the host
+    and the satellites already selected by ``HaloExtractStage``), which
+    for a Dorcha-style zoom-in box are the field/companion halos
+    surrounding the host system.
+
+    ``mass_threshold``/``aperture_radius`` are required constructor
+    arguments, not defaulted: the design doc specifies "above a mass
+    threshold" / "within a fixed aperture", but no specific values are
+    documented anywhere in this codebase -- pass the ones your project
+    actually wants rather than have this stage silently pick a number.
+
+    Units caveat (same as ``HaloExtractStage``): computed in whatever
+    length/mass units the Epoch's ``HaloCatalogue`` was configured with
+    (comoving/little_h), not necessarily schema.py's declared "Mpc^-3
+    (comoving)"/"Mpc" -- unit reconciliation against the schema isn't
+    implemented anywhere in the pipeline yet.
+
+    Deliberately **not** computed here, documented rather than guessed:
+
+    - ``TidalIndex``: the Karachentsev-style tidal index has more than one
+      non-equivalent convention in the literature (single most tidally-
+      dominant neighbour vs. a sum over neighbours; what reference mass/
+      offset constant, if any, is subtracted) -- picking one silently
+      would bake in an unstated convention.
+    - ``CosmicWebClass``: needs an actual web classifier (T-web/V-web or
+      similar) -- a substantial separate piece of machinery, not a
+      neighbour-counting operation.
+    - ``HostIsIsolated``/``HostIsPaired``: copy-through of
+      ``Haloes/IsIsolated``/``Haloes/IsPaired``, neither of which exists
+      yet -- no host-level isolation/pairing algorithm is implemented
+      anywhere in this pipeline (that belongs to ``Haloes/`` table
+      construction, not this stage).
+    """
 
     name = "environment"
-    inputs = ("Haloes/Position",)
+    inputs = ("Satellites/_internal/pos_z0", "Satellites/_internal/halo_row")
     outputs = ("Satellites/Environment/LocalNumberDensity",
-               "Satellites/Environment/CosmicWebClass")
+               "Satellites/Environment/DistanceToNearestMassiveNeighbour")
+
+    def __init__(self, epoch, host_row: int, mass_threshold: float,
+                 aperture_radius: float):
+        self.epoch = epoch
+        self.host_row = int(host_row)
+        self.mass_threshold = float(mass_threshold)
+        self.aperture_radius = float(aperture_radius)
 
     def run(self, context):
-        raise NotImplementedError("Phase 6b.")
+        halos = self.epoch.halos
+        if halos is None:
+            raise RuntimeError(
+                f"Stage '{self.name}': this Epoch has no halo catalogue.")
+
+        satellite_halo_rows = np.asarray(
+            context.columns["Satellites/_internal/halo_row"])
+        excluded = set(int(r) for r in satellite_halo_rows) | {self.host_row}
+
+        mass = np.asarray(halos["mass"])
+        pos = np.asarray(halos["pos"])
+        neighbour_mask = np.ones(len(mass), dtype=bool)
+        neighbour_mask[list(excluded)] = False
+        neighbour_mask &= mass >= self.mass_threshold
+        neighbour_pos = pos[neighbour_mask]
+
+        boxsize = self.epoch.boxsize
+        satellite_pos = np.asarray(
+            context.columns["Satellites/_internal/pos_z0"])
+        n = satellite_pos.shape[0]
+
+        local_density = np.full(n, np.nan)
+        distance_to_nearest = np.full(n, np.nan)
+        volume = (4.0 / 3.0) * np.pi * self.aperture_radius ** 3
+
+        if neighbour_pos.shape[0] == 0:
+            logger.warning(
+                "%s: no neighbours found above mass_threshold=%.3e; "
+                "LocalNumberDensity=0 and "
+                "DistanceToNearestMassiveNeighbour left NaN for every "
+                "satellite.", self.name, self.mass_threshold)
+            local_density[:] = 0.0
+        else:
+            for i in range(n):
+                dpos = periodic_delta(neighbour_pos - satellite_pos[i],
+                                      boxsize)
+                dist = np.linalg.norm(dpos, axis=1)
+                local_density[i] = \
+                    np.count_nonzero(dist <= self.aperture_radius) / volume
+                distance_to_nearest[i] = float(np.min(dist))
+
+        context.columns["Satellites/Environment/LocalNumberDensity"] = \
+            local_density
+        context.columns[
+            "Satellites/Environment/DistanceToNearestMassiveNeighbour"] = \
+            distance_to_nearest
+
+        context.record_stage(self.name, n_satellites=n,
+                             n_neighbours=int(neighbour_pos.shape[0]),
+                             mass_threshold=self.mass_threshold,
+                             aperture_radius=self.aperture_radius)
+        return context
 
 
 class ObservabilityStage(PipelineStage):
