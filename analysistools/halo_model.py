@@ -246,7 +246,7 @@ class HaloModel:
         return self._first_available(
             redshift,
             ["Group_M_Crit200", "Mass_200crit", "Mvir", "m200c",
-             "Group_M_Mean200", "Mass_tot", "Masses"],
+             "Group_M_Mean200", "Mass_tot", "Masses", "Mass"],
             label="virial mass",
         )
 
@@ -275,7 +275,7 @@ class HaloModel:
         snap = self._load(redshift)
         halos = snap["halos"]
 
-        for key in ["GroupPos", "Xcminpot", "Xc", "position", "Centres"]:
+        for key in ["GroupPos", "Xcminpot", "Xc", "position", "Centres", "Pos"]:
             if key in halos:
                 arr = halos[key]
                 if arr.ndim == 2 and arr.shape[1] == 3:

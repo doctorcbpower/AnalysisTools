@@ -31,24 +31,30 @@ def read_ahf(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], Dict
     halos : dict[str, np.ndarray]
     subhalos : dict[str, np.ndarray]
     """
+    if not filename.endswith(".AHF_halos"):
+        raise ValueError(
+            f"read_ahf() expects a '.AHF_halos' file, got '{filename}'. "
+            "(The '.AHF_substructure' sibling file, if present, is picked "
+            "up automatically.)"
+        )
+
     metadata: Dict[str, Any] = {}
     halos: Dict[str, np.ndarray] = {}
     subhalos: Dict[str, np.ndarray] = {}
 
     # Read main halos
-    if filename.endswith(".AHF_halos"):
-        data = np.genfromtxt(filename, comments="#")
-        halos["HaloID"] = data[:, 0].astype(np.int64)
-        halos["HostHaloID"] = data[:, 1].astype(np.int64)
-        halos["NumSubStruct"] = data[:, 2].astype(np.int64)
-        halos["Mass"] = data[:, 3].astype(np.float64)
-        halos["NumPart"] = data[:, 4].astype(np.int64)
-        halos["Pos"] = data[:, 5:8].astype(np.int32)
-        halos["Vel"] = data[:, 8:11].astype(np.int32)
-        halos["Rvir"] = data[:, 11].astype(np.float64)
-        halos["com_offset"] = data[:,15].astype(np.float64)
-        halos["Vmax"] = data[:,16].astype(np.float64)
-        metadata["Nhalos"] = len(data)
+    data = np.genfromtxt(filename, comments="#")
+    halos["HaloID"] = data[:, 0].astype(np.int64)
+    halos["HostHaloID"] = data[:, 1].astype(np.int64)
+    halos["NumSubStruct"] = data[:, 2].astype(np.int64)
+    halos["Mass"] = data[:, 3].astype(np.float64)
+    halos["NumPart"] = data[:, 4].astype(np.int64)
+    halos["Pos"] = data[:, 5:8].astype(np.float64)
+    halos["Vel"] = data[:, 8:11].astype(np.float64)
+    halos["Rvir"] = data[:, 11].astype(np.float64)
+    halos["com_offset"] = data[:,15].astype(np.float64)
+    halos["Vmax"] = data[:,16].astype(np.float64)
+    metadata["Nhalos"] = len(data)
 
     # Read optional substructure file
     subfile = filename.replace(".AHF_halos", ".AHF_substructure")

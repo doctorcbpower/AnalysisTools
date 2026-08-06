@@ -54,12 +54,28 @@ CATALOGUE_MAPPINGS: Dict[Tuple[str, str], Dict[str, str]] = {
         "num_part": "SubhaloLen",
     },
     ("AHF", "Group"): {
-        "mass": "Mvir",
-        "pos": "Xc",   # can be split from Xc, Yc, Zc if stored separately
-        "vel": "Vcm",  # likewise Vx, Vy, Vz may need stacking
+        # Native names as actually produced by haloio_ahf.read_ahf() (which
+        # combines Xc/Yc/Zc and VXc/VYc/VZc into single Pos/Vel arrays
+        # itself) -- this previously named fields ("Mvir", "Xc", "Vcm", "ID",
+        # "npart") that read_ahf() never produces, so mass/pos/vel/halo_id/
+        # num_part all silently came back None for every AHF catalogue.
+        "mass": "Mass",
+        "pos": "Pos",
+        "vel": "Vel",
         "radius": "Rvir",
-        "halo_id": "ID",
-        "num_part": "npart",
+        "halo_id": "HaloID",
+        "num_part": "NumPart",
+    },
+    ("AHF", "Subhalo"): {
+        # Native names from haloio_ahf.read_ahf()'s .AHF_substructure
+        # parsing. No distinct subhalo ID or particle-count column is read,
+        # hence ROW_INDEX_SENTINEL and no "num_part" entry (omitted, rather
+        # than pointing at a field that doesn't exist).
+        "mass": "SubhaloMass",
+        "pos": "Pos",
+        "vel": "Vel",
+        "radius": "Rvir",
+        "halo_id": ROW_INDEX_SENTINEL,
     },
     ("VELOCIraptor", "Group"): {
         "mass": "Mass_200crit",
