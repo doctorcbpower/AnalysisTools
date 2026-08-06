@@ -379,17 +379,72 @@ class EnvironmentStage(PipelineStage):
 
 
 class ObservabilityStage(PipelineStage):
-    """Heliocentric distance, Galactic coordinates, apparent magnitudes,
-    surface brightness, Rubin detection probability, completeness weight."""
+    """``HeliocentricDistance`` and ``GalactocentricRadius`` -- the only
+    two ``Satellites/Observability/*`` fields computable without either an
+    assumed galaxy luminosity (``SharkGalaxyBackend`` doesn't compute
+    ``LuminosityV``/``Luminosity_ugriz`` -- see its docstring) or a
+    Rubin/LSST survey selection-function model (footprint, depth maps --
+    external data this pipeline doesn't have).
+
+    ``HeliocentricDistance`` needs a defined "mock Sun" position -- there
+    is no natural one for a simulated system, so ``observer_pos`` is a
+    required constructor argument (absolute box coordinates), not guessed.
+    ``GalactocentricRadius`` needs no new parameter: it's the distance from
+    the host's own z=0 position, already in context via
+    ``HaloExtractStage``.
+
+    Units caveat (same as ``HaloExtractStage``/``EnvironmentStage``):
+    computed in whatever length units the Epoch's ``HaloCatalogue`` was
+    configured with, not necessarily schema.py's declared "kpc" -- unit
+    reconciliation isn't implemented anywhere in the pipeline yet.
+
+    Deliberately **not** computed here, documented rather than guessed:
+
+    - ``GalacticLongitude``/``GalacticLatitude``/``RA``/``Dec``: need an
+      arbitrary "mock sky orientation" convention (which direction in the
+      box is Galactic north, and how that maps onto equatorial
+      coordinates) -- nothing in this codebase or the design doc pins one
+      down, and RA/Dec in particular conventionally implies alignment
+      with the *real* sky, which doesn't apply to synthetic data without
+      yet another undocumented convention.
+    - ``ApparentMagnitude_ugriz``/``SurfaceBrightness_V``: need
+      ``Luminosity_ugriz``/``LuminosityV``/``HalfLightRadius``, none of
+      which ``SharkGalaxyBackend`` computes yet.
+    - ``RubinDetectionProbability``/``RubinCoaddDepth_r``/
+      ``CompletenessWeight``/``SurveyFootprintFlag``: need an actual
+      Rubin/LSST selection-function model (footprint polygon, coadd depth
+      maps) -- external survey data this pipeline has no access to, a
+      different kind of input entirely from anything computed so far.
+    """
 
     name = "observability"
-    inputs = ("Satellites/HaloProperties/",
-              "Satellites/GalaxyProperties/LuminosityV")
-    outputs = ("Satellites/Observability/RubinDetectionProbability",
-               "Satellites/Observability/CompletenessWeight")
+    inputs = ("Satellites/_internal/pos_z0", "Haloes/Position")
+    outputs = ("Satellites/Observability/HeliocentricDistance",
+               "Satellites/Observability/GalactocentricRadius")
+
+    def __init__(self, epoch, observer_pos):
+        self.epoch = epoch
+        self.observer_pos = np.asarray(observer_pos, dtype=float)
 
     def run(self, context):
-        raise NotImplementedError("Phase 6b.")
+        satellite_pos = np.asarray(
+            context.columns["Satellites/_internal/pos_z0"])
+        host_pos = np.asarray(context.columns["Haloes/Position"])[0]
+        boxsize = self.epoch.boxsize
+
+        d_host = periodic_delta(satellite_pos - host_pos, boxsize)
+        galactocentric_radius = np.linalg.norm(d_host, axis=1)
+
+        d_obs = periodic_delta(satellite_pos - self.observer_pos, boxsize)
+        heliocentric_distance = np.linalg.norm(d_obs, axis=1)
+
+        context.columns["Satellites/Observability/HeliocentricDistance"] = \
+            heliocentric_distance
+        context.columns["Satellites/Observability/GalactocentricRadius"] = \
+            galactocentric_radius
+
+        context.record_stage(self.name, n_satellites=len(satellite_pos))
+        return context
 
 
 class DorchaSpecificStage(PipelineStage):
