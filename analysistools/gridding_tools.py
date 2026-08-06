@@ -425,7 +425,30 @@ class GriddingTools:
                            slice_axis='z', slice_value=0.0,
                            max_distance=None,
                            figsize=(8, 8), title=None):
+        """
+        Draw the 2D Voronoi tessellation of particles within `max_distance`
+        of a slice plane, using mirrored points to bound edge cells cleanly.
 
+        Parameters
+        ----------
+        positions : (N, 3) array
+        width, height : float
+            Extent of the plotting box along the two in-plane axes.
+        slice_axis : {'x', 'y', 'z'}, optional
+            Axis normal to the slice plane. Default 'z'.
+        slice_value : float, optional
+            Coordinate of the slice plane along `slice_axis`. Default 0.0.
+        max_distance : float, optional
+            Half-thickness of the slab selected around the slice plane.
+            Defaults to an estimate of the mean particle spacing in-plane.
+        figsize : tuple, optional
+            Matplotlib figure size. Default (8, 8).
+        title : str, optional
+
+        Returns
+        -------
+        (fig, ax) : matplotlib Figure and Axes with the tessellation drawn.
+        """
         axis_map = {'x': 0, 'y': 1, 'z': 2}
         normal   = axis_map[slice_axis]
         plane_ax = [i for i in range(3) if i != normal]

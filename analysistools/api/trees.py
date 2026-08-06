@@ -130,6 +130,14 @@ class MergerTree:
         return self._backend
 
     def preload(self) -> "MergerTree":
+        """
+        Force the backend (and thus the tree file) to load now, rather
+        than lazily on first use.
+
+        Returns
+        -------
+        self
+        """
         self.backend
         return self
 
@@ -211,10 +219,27 @@ class MergerTree:
     # ------------------------------------------------------------------
 
     def find_infall(self, track) -> Optional[dict]:
+        """
+        Locate the infall snapshot (first transition to subhalo) along a
+        track.
+
+        Parameters
+        ----------
+        track : TrackDataset or the underlying track object
+
+        Returns
+        -------
+        dict or None
+            None if the halo is never a subhalo along the track.
+        """
         tr = track.track if isinstance(track, TrackDataset) else track
         return self.backend.find_infall(tr)
 
     def summary(self) -> None:
+        """
+        Print the tree format, label, path, and node count (if the
+        backend exposes a lookup table).
+        """
         b = self.backend
         print(f"MergerTree ({self.fileformat})")
         print(f"  label: {self.label}")

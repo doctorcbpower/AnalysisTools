@@ -85,22 +85,35 @@ class Epoch:
 
     @property
     def snapshot(self) -> Optional[SnapshotDataset]:
+        """Snapshot Dataset at this epoch's redshift, or None if unset."""
         return self._component("snapshots")
 
     @property
     def halos(self) -> Optional[HaloCatalogue]:
+        """Halo catalogue at this epoch's redshift, or None if unset."""
         return self._component("halos")
 
     @property
     def galaxies(self) -> Optional[GalaxyCatalogue]:
+        """Galaxy catalogue at this epoch's redshift, or None if unset."""
         return self._component("galaxies")
 
     @property
     def tree(self) -> Optional[MergerTree]:
+        """The parent Simulation's merger tree (not epoch-specific)."""
         return self.sim.tree
 
     @property
     def snapnum(self) -> Optional[int]:
+        """
+        Snapshot number at this epoch's redshift.
+
+        Returns
+        -------
+        int or None
+            From `sim.snapnums` if given, else from the halo catalogue's
+            metadata; None if neither is available.
+        """
         sn = self.sim._snapnum_at(self.redshift)
         if sn is not None:
             return sn
@@ -109,6 +122,15 @@ class Epoch:
 
     @property
     def boxsize(self) -> Optional[float]:
+        """
+        Simulation box size, read from whichever component's metadata has
+        it, preferring already-loaded components and cheaper ones (halos
+        before snapshot/galaxies) before forcing loads.
+
+        Returns
+        -------
+        float or None
+        """
         comps = [self.halos, self.snapshot, self.galaxies]
         # first from anything already loaded, then force loads in order of
         # increasing cost (halo catalogues are far lighter than snapshots)
@@ -245,6 +267,10 @@ class Epoch:
                               snapnum=self.snapnum)
 
     def summary(self) -> None:
+        """
+        Print this epoch's redshift/snapnum, the load state of each
+        component (snapshots/halos/galaxies), and whether a tree is set.
+        """
         print(f"Epoch z={self.redshift:g} of Simulation "
               f"'{self.sim.label}'"
               + (f" (snapnum {self.snapnum})" if self.snapnum is not None
@@ -314,6 +340,15 @@ class Simulation:
 
     @property
     def tree(self) -> Optional[MergerTree]:
+        """
+        The Simulation's MergerTree, built lazily from the `trees` spec
+        and cached.
+
+        Returns
+        -------
+        MergerTree or None
+            None if no `trees` spec was given.
+        """
         spec = self._specs.get("trees")
         if spec is None:
             return None
@@ -384,6 +419,10 @@ class Simulation:
                                           object_type=object_type)
 
     def summary(self) -> None:
+        """
+        Print each component's spec (path, epochs, or object) and the
+        registered snapnums, if any.
+        """
         print(f"Simulation '{self.label}'")
         for kind in ("snapshots", "halos", "trees", "galaxies"):
             spec = self._specs.get(kind)

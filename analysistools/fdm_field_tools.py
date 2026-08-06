@@ -61,6 +61,19 @@ class FDMFieldTools:
         self.filename = filename
 
     def read_field(self, filename=None):
+        """
+        Read the HDF5 field file (attrs N, L, FDMMass; datasets PsiReal,
+        PsiImag) and populate `self.N`, `self.L`, `self.mass`, `self.psi`.
+
+        Parameters
+        ----------
+        filename : str, optional
+            If given, overrides/sets `self.filename` before reading.
+
+        Returns
+        -------
+        self
+        """
         if filename is not None:
             self.filename = filename
         if self.filename is None:

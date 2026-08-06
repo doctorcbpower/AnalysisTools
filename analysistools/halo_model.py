@@ -82,6 +82,14 @@ class _SnapshotTable:
 
     @property
     def available_redshifts(self) -> Optional[np.ndarray]:
+        """
+        Redshifts registered when this source was built from a dict.
+
+        Returns
+        -------
+        (N,) array or None
+            None if the source is a callable rather than a dict.
+        """
         return self._redshifts
 
 

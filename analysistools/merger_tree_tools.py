@@ -713,6 +713,9 @@ class MergerTreeTools:
         return fig
 
     def summary(self) -> None:
+        """
+        Print the tree file format, filename, and metadata key/value pairs.
+        """
         print("Merger Tree Summary")
         print(f"  Format: {self.treefileformat}")
         print(f"  File:   {os.path.basename(self.treefilename)}")

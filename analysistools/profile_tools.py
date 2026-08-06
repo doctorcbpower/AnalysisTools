@@ -69,6 +69,19 @@ class ProfileTools:
     ## Compute positions
     @staticmethod
     def relative_position(pos, centre=None):
+        """
+        Positions relative to a centre.
+
+        Parameters
+        ----------
+        pos : (N, 3) array
+        centre : (3,) array, optional
+            Defaults to the origin.
+
+        Returns
+        -------
+        (N, 3) array
+        """
 
         if centre is None:
             centre = np.zeros(3)
@@ -77,6 +90,18 @@ class ProfileTools:
 
 
     def spherical_radius(self, pos, centre=None):
+        """
+        3D distance from `centre` (|pos - centre|).
+
+        Parameters
+        ----------
+        pos : (N, 3) array
+        centre : (3,) array, optional
+
+        Returns
+        -------
+        r : (N,) array
+        """
 
         dpos = self.relative_position(pos, centre)
 
@@ -84,6 +109,19 @@ class ProfileTools:
 
 
     def cylindrical_radius(self, pos, centre=None):
+        """
+        In-plane distance from `centre` (sqrt(x^2 + y^2)), i.e. the
+        projected radius used for disc/surface-density profiles.
+
+        Parameters
+        ----------
+        pos : (N, 3) array
+        centre : (3,) array, optional
+
+        Returns
+        -------
+        R : (N,) array
+        """
 
         dpos = self.relative_position(pos, centre)
 
@@ -93,6 +131,21 @@ class ProfileTools:
     ## Impose binning
     def radial_bins(self, rmin, rmax, nbins=None,
                     logarithmic=True):
+        """
+        Radial bin edges for profile()/volume_density()/etc.
+
+        Parameters
+        ----------
+        rmin, rmax : float
+        nbins : int, optional
+            Defaults to `self.numbins`.
+        logarithmic : bool
+            Log-spaced (default) or linearly spaced edges.
+
+        Returns
+        -------
+        bins : (nbins + 1,) array
+        """
 
         if nbins is None:
             nbins = self.numbins
@@ -108,12 +161,45 @@ class ProfileTools:
 
 
     def bin_indices(self, r, bins):
+        """
+        Zero-based bin index of each `r` w.r.t. `bins` (as from
+        radial_bins()). Values < bins[0] map to -1; values >= bins[-1]
+        map to len(bins)-1 — both outside the valid [0, len(bins)-2] range.
+
+        Parameters
+        ----------
+        r : (N,) array
+        bins : (nbins + 1,) array
+
+        Returns
+        -------
+        index : (N,) int array
+        """
         return np.digitize(r, bins)-1
 
 
     ## Calculate radial profiles
     def profile(self, r, quantity, bins,
                 weights=None):
+        """
+        Bin an arbitrary quantity by radius.
+
+        Parameters
+        ----------
+        r : (N,) array
+            Radii (spherical_radius() or cylindrical_radius()).
+        quantity : (N,) array
+            Values to summarise per bin.
+        bins : (nbins + 1,) array
+            Bin edges, e.g. from radial_bins().
+        weights : (N,) array, optional
+            Weights for the weighted mean (median stays unweighted).
+
+        Returns
+        -------
+        dict with keys "r" (bin centres), "mean", "median", "count",
+        each (nbins,). Empty bins are NaN (mean/median) or 0 (count).
+        """
 
         index = self.bin_indices(r, bins)
 
@@ -152,6 +238,23 @@ class ProfileTools:
 
     ## Calculate density profiles
     def volume_density(self, pos, mass, centre, rmin, rmax, nbins=None):
+        """
+        Spherically-averaged mass density profile, rho(r) = mass / shell
+        volume.
+
+        Parameters
+        ----------
+        pos : (N, 3) array
+        mass : (N,) array
+        centre : (3,) array
+        rmin, rmax : float
+        nbins : int, optional
+            Defaults to `self.numbins`.
+
+        Returns
+        -------
+        dict with keys "r" (bin centres) and "density", each (nbins,).
+        """
         r = self.spherical_radius(pos, centre)
 
         bins = self.radial_bins(rmin,rmax,nbins)
@@ -177,6 +280,23 @@ class ProfileTools:
         }
 
     def surface_density(self,pos,mass, centre, rmin,rmax, nbins=None):
+        """
+        Azimuthally-averaged surface density profile, Sigma(R) = mass /
+        annulus area, using the in-plane (cylindrical) radius.
+
+        Parameters
+        ----------
+        pos : (N, 3) array
+        mass : (N,) array
+        centre : (3,) array
+        rmin, rmax : float
+        nbins : int, optional
+            Defaults to `self.numbins`.
+
+        Returns
+        -------
+        dict with keys "r" (bin centres) and "density", each (nbins,).
+        """
         R=self.cylindrical_radius(pos,centre)
 
         bins=self.radial_bins(rmin,rmax,nbins)
@@ -204,6 +324,23 @@ class ProfileTools:
 
     ## Calculate kinematic profiles
     def velocity_dispersion(self,pos,vel, centre, rmin,rmax, nbins=None):
+        """
+        3D velocity dispersion profile, sigma(r) = sqrt(<v^2> - |<v>|^2),
+        in spherical radial bins.
+
+        Parameters
+        ----------
+        pos, vel : (N, 3) arrays
+        centre : (3,) array
+        rmin, rmax : float
+        nbins : int, optional
+            Defaults to `self.numbins`.
+
+        Returns
+        -------
+        dict with keys "r" and "sigma", each (nbins,). Bins with <= 5
+        particles are NaN.
+        """
         r=self.spherical_radius(pos,centre)
 
         bins=self.radial_bins(rmin,rmax,nbins)
@@ -238,6 +375,24 @@ class ProfileTools:
                      centre,
                      rmin,rmax,
                      nbins=None):
+        """
+        Vertical scale height profile, h_z(R) = sqrt(<z^2>) mass-weighted
+        within each cylindrical-radius bin.
+
+        Parameters
+        ----------
+        pos : (N, 3) array
+        mass : (N,) array
+        centre : (3,) array
+        rmin, rmax : float
+        nbins : int, optional
+            Defaults to `self.numbins`.
+
+        Returns
+        -------
+        dict with keys "r" and "scale_height", each (nbins,). Empty bins
+        are NaN.
+        """
 
         R=self.cylindrical_radius(pos,centre)
 
@@ -267,6 +422,23 @@ class ProfileTools:
         }
 
     def vertical_velocity_dispersion(self,pos,vel, centre, rmin,rmax, nbins=None):
+        """
+        Vertical velocity dispersion profile, sigma_z(R), in cylindrical
+        radial bins.
+
+        Parameters
+        ----------
+        pos, vel : (N, 3) arrays
+        centre : (3,) array
+        rmin, rmax : float
+        nbins : int, optional
+            Defaults to `self.numbins`.
+
+        Returns
+        -------
+        dict with keys "r" and "sigma_z", each (nbins,). Bins with <= 5
+        particles are NaN.
+        """
         R=self.cylindrical_radius(pos,centre)
 
         bins=self.radial_bins(rmin,rmax,nbins)
@@ -303,6 +475,25 @@ class ProfileTools:
     # ------------------------------------------------------------
 
     def plot(self, profile,ykey,xlabel="Radius",ylabel=None,xlog=True,ylog=True,label=None):
+        """
+        Quick-look log-log plot of a profile dict's `ykey` vs "r".
+
+        Parameters
+        ----------
+        profile : dict
+            Output of volume_density(), surface_density(), etc.
+        ykey : str
+            Key in `profile` to plot on the y-axis.
+        xlabel, ylabel : str, optional
+        xlog, ylog : bool
+            Log-scale each axis (default both True).
+        label : str, optional
+            Legend label; legend is only drawn if given.
+
+        Returns
+        -------
+        None (calls plt.show()).
+        """
         plt.figure()
 
         plt.plot(
@@ -341,6 +532,29 @@ class MassFunctionTools:
                       delta_logmass=0.,
                       numbins=10,
                       centre_stat="median"):     # "median" or "mean"):
+        """
+        Differential halo mass function, dn/dlog10(M), in log-mass bins.
+
+        Parameters
+        ----------
+        halo_mass : (N,) array
+        lbox : float
+            Box side length (same length units as used to normalise the
+            volume; density is mass/lbox**3).
+        delta_logmass : float, optional
+            Bin width in dex. If > 0, overrides `numbins`.
+        numbins : int
+            Used when `delta_logmass` is not given.
+        centre_stat : {"median", "mean"}
+            Statistic used for the representative mass of each bin.
+
+        Returns
+        -------
+        lm : (numbins,) array
+            Bin-centre log10(mass).
+        ldndlm : (numbins,) array
+            log10(dn/dlogM).
+        """
 
         logm = np.log10(halo_mass)
 

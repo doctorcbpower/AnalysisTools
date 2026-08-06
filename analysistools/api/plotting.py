@@ -180,8 +180,17 @@ def overlay_points(ax, ds: Dataset, *, projection: str = "xy",
             c = np.log10(np.clip(c, np.finfo(float).tiny, None))
         kwargs = dict(c=c)
     kwargs.update(scatter_kwargs)
+
+    # Preserve any existing framing (e.g. a density_map's imshow extent) so
+    # points that fall outside it don't drag the axes limits open.
+    lims = (ax.get_xlim(), ax.get_ylim()) if ax.images else None
+
     sc = ax.scatter(p2[:, 0], p2[:, 1], s=s,
                     label=ds.label or None, **kwargs)
+
+    if lims is not None:
+        ax.set_xlim(lims[0])
+        ax.set_ylim(lims[1])
     return sc
 
 

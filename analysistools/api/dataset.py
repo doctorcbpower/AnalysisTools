@@ -197,6 +197,16 @@ class Dataset:
         return arr
 
     def get(self, field: str, default=None):
+        """
+        Like `self[field]` but returns `default` instead of raising when
+        the field is missing.
+
+        Parameters
+        ----------
+        field : str
+        default : optional
+            Value returned if `field` cannot be resolved. Default None.
+        """
         try:
             return self[field]
         except KeyError:
@@ -330,6 +340,14 @@ class Dataset:
 
     @property
     def is_view(self) -> bool:
+        """
+        Whether this dataset is a row-indexed view onto another dataset's
+        columns (e.g. as produced by `select`).
+
+        Returns
+        -------
+        bool
+        """
         return self._index is not None
 
     # ------------------------------------------------------------------

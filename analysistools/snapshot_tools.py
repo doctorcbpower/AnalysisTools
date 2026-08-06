@@ -384,10 +384,25 @@ class SnapshotTools:
         
     @property
     def hsml(self):
+        """
+        Alias for `self.smoothinglength`.
+
+        Returns
+        -------
+        array or None
+            `self.smoothinglength` if set, else None.
+        """
         return getattr(self, 'smoothinglength', None)
 
     @hsml.setter
     def hsml(self, value):
+        """
+        Set `self.smoothinglength` via the `hsml` alias.
+
+        Parameters
+        ----------
+        value : array
+        """
         self.smoothinglength = value
         
     def _ensure_ptype(self):

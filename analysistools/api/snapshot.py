@@ -241,22 +241,43 @@ class SnapshotDataset(Dataset):
 
     @property
     def gas(self) -> "SnapshotDataset":
+        """View restricted to gas particles."""
         return self._species_view("gas")
 
     @property
     def dm(self) -> "SnapshotDataset":
+        """View restricted to dark-matter particles."""
         return self._species_view("dm")
 
     @property
     def star(self) -> "SnapshotDataset":
+        """View restricted to star particles."""
         return self._species_view("star")
 
     @property
     def bh(self) -> "SnapshotDataset":
+        """View restricted to black-hole particles."""
         return self._species_view("bh")
 
     def select(self, mask=None, *, species: Optional[str] = None,
                **kwargs) -> "SnapshotDataset":
+        """
+        Return a view restricted by species and/or the usual `Dataset.select`
+        cuts.
+
+        Parameters
+        ----------
+        mask : bool or int ndarray, optional
+        species : str, optional
+            One of `SPECIES_TYPE_ATTR` (e.g. 'gas', 'dm', 'star', 'bh');
+            applied before `mask`/`**kwargs`.
+        **kwargs :
+            Forwarded to `Dataset.select`.
+
+        Returns
+        -------
+        SnapshotDataset view.
+        """
         base = self._species_view(species) if species else self
         return Dataset.select(base, mask, **kwargs)
 
@@ -273,6 +294,10 @@ class SnapshotDataset(Dataset):
         return self._data
 
     def summary(self) -> None:
+        """
+        Print the base dataset summary plus per-species particle counts
+        derived from `num_part_total`.
+        """
         super().summary()
         npt = self.meta.get("num_part_total")
         if npt is not None and len(npt):

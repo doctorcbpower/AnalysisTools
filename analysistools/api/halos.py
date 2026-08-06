@@ -138,6 +138,13 @@ class HaloCatalogue(Dataset):
 
     @property
     def has_subhalos(self) -> bool:
+        """
+        Whether this catalogue has a subhalo table.
+
+        Returns
+        -------
+        bool
+        """
         self._ensure_loaded()
         return bool(self._sub_columns)
 
@@ -147,6 +154,9 @@ class HaloCatalogue(Dataset):
         return self._backend
 
     def summary(self) -> None:
+        """
+        Print the base dataset summary plus the subhalo count, if present.
+        """
         super().summary()
         if self.has_subhalos:
             n = len(next(iter(self._sub_columns.values())))
