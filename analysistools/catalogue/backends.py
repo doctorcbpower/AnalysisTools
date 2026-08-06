@@ -20,9 +20,11 @@ between projects") and DEVELOPMENT.md Phase 6.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol
+from typing import Any, Dict, Optional, Protocol
 
 import logging
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,44 @@ class SharkGalaxyBackend:
     """Galaxy properties from a SHARK semi-analytic catalogue, matched to
     the halo catalogue via ``Epoch.galaxies_in_halo`` (position matching by
     default -- see api/simulation.py).
+
+    When more than one SHARK galaxy falls within the match aperture
+    (``r_scale`` * halo radius), the most massive one (by stellar mass) is
+    treated as "the" galaxy hosted by this halo -- the central, in SAM
+    convention. Returns ``{}`` (per the ``GalaxyBackend`` protocol) when
+    nothing matches, or when no stellar mass is resolvable at all (so no
+    central can be identified).
+
+    Fields returned, and where they come from (see
+    ``analysistools.shark.model.GALAXY_FIELDS`` for the full native-name
+    registry):
+
+    - ``StellarMass``, ``GasMass_Cold``, ``StarFormationRate``,
+      ``BlackHoleMass``: the ``GalaxyCatalogue``'s own standardised
+      aliases (``mass``, ``mgas``, ``sfr``, ``mbh``).
+    - ``GasMass_Hot``: native ``"mhot"`` (not part of the standardised
+      alias set).
+    - ``MetallicityStellar``/``MetallicityGas``: metal mass / total mass,
+      from the native ``*_metals_disk``/``*_metals_bulge`` fields -- a
+      genuinely unit- and h-independent ratio, unlike everything else
+      here (see units caveat below).
+
+    Units caveat (same as ``pipeline.HaloExtractStage``/
+    ``derived.EnvironmentStage``): values are returned exactly as
+    ``GalaxyCatalogue`` provides them -- SHARK's own native convention
+    (``Msun/h`` masses, ``Msun/Gyr/h`` star formation rates -- note that's
+    *also* a Gyr-vs-yr mismatch against schema.py's declared "Msun/yr",
+    not just little-h), not schema.py's declared units. Unit
+    reconciliation isn't implemented anywhere in this pipeline yet.
+
+    Deliberately **not** returned, documented rather than guessed:
+    ``LuminosityV``/``Luminosity_ugriz``/``AbsoluteMagnitude_ugriz`` (need
+    ``shark.photometry``'s separate, optional fsps-based pipeline -- not
+    wired into this backend), ``HalfLightRadius`` (depends on
+    luminosity), ``HalfMassRadiusStellar`` (``rstar_disk``/``rstar_bulge``
+    are exponential/profile scale lengths, not half-mass radii --
+    converting one to the other needs an assumed disk/bulge profile
+    shape), ``SersicIndex`` (SHARK produces no structural fit at all).
     """
 
     name = "shark"
@@ -53,12 +93,58 @@ class SharkGalaxyBackend:
         self.r_scale = r_scale
 
     def galaxy_properties(self, epoch, halo_row: int) -> Dict[str, Any]:
-        raise NotImplementedError(
-            "Phase 6b: epoch.galaxies_in_halo(index=halo_row, "
-            "match_by=self.match_by, r_scale=self.r_scale) -> aggregate "
-            "GalaxyCatalogue fields (mass, sfr, metallicity, sfh, ...) "
-            "into the GalaxyProperties field names in schema.py."
-        )
+        matched = epoch.galaxies_in_halo(
+            index=halo_row, match_by=self.match_by, r_scale=self.r_scale)
+        if len(matched) == 0 or "mass" not in matched:
+            return {}
+
+        mass = np.asarray(matched["mass"])
+        central = int(np.argmax(mass))
+
+        def scalar(field: str, default: Optional[float] = None):
+            arr = matched.get(field)
+            return (float(np.asarray(arr)[central]) if arr is not None
+                    else default)
+
+        def metal_mass(disk_field: str, bulge_field: str):
+            """Sum of disk+bulge metal mass, or None if *neither* component
+            is available -- unlike scalar()'s own default=0.0 use below,
+            this must not silently produce 0.0 for "field never existed"
+            (that would compute a fake MetallicityStellar/Gas=0.0 instead
+            of omitting it, exactly what the GalaxyBackend protocol says
+            not to do)."""
+            disk, bulge = scalar(disk_field), scalar(bulge_field)
+            if disk is None and bulge is None:
+                return None
+            return (disk or 0.0) + (bulge or 0.0)
+
+        stellar_mass = scalar("mass")
+        gas_mass_cold = scalar("mgas")
+        stellar_metal_mass = metal_mass("mstars_metals_disk",
+                                        "mstars_metals_bulge")
+        gas_metal_mass = metal_mass("mgas_metals_disk", "mgas_metals_bulge")
+
+        props: Dict[str, Any] = {}
+        if stellar_mass is not None:
+            props["StellarMass"] = stellar_mass
+            if stellar_metal_mass is not None and stellar_mass > 0:
+                props["MetallicityStellar"] = \
+                    stellar_metal_mass / stellar_mass
+        if gas_mass_cold is not None:
+            props["GasMass_Cold"] = gas_mass_cold
+            if gas_metal_mass is not None and gas_mass_cold > 0:
+                props["MetallicityGas"] = gas_metal_mass / gas_mass_cold
+        hot = scalar("mhot")
+        if hot is not None:
+            props["GasMass_Hot"] = hot
+        sfr = scalar("sfr")
+        if sfr is not None:
+            props["StarFormationRate"] = sfr
+        mbh = scalar("mbh")
+        if mbh is not None:
+            props["BlackHoleMass"] = mbh
+
+        return props
 
 
 class HydroGalaxyBackend:
