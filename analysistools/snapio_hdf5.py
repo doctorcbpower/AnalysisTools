@@ -416,6 +416,15 @@ class write_hdf5:
             self.name_of_mass_block = "Masses"
                 
     def write_hdf5_snapshot(self, output_file):
+        """
+        Write the buffered snapshot data to a single HDF5 file in the
+        configured output convention (SWIFT, GADGET4/AREPO, or GADGET2/3).
+
+        Parameters
+        ----------
+        output_file : str
+            Path without extension; ".hdf5" is appended.
+        """
         filename = output_file + ".hdf5"
         print(f"Writing data to {filename} in {self.output_convention.upper()} format.")
    

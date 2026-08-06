@@ -30,10 +30,36 @@ class EpochModel(ABC):
     """
 
     @abstractmethod
-    def get(self, field: str, redshift: float) -> np.ndarray: ...
+    def get(self, field: str, redshift: float) -> np.ndarray:
+        """
+        Fetch a field's values at the given redshift, loading/caching that
+        epoch's data as needed.
+
+        Parameters
+        ----------
+        field : str
+        redshift : float
+
+        Returns
+        -------
+        array
+        """
+        ...
 
     @abstractmethod
-    def get_meta(self, redshift: float) -> Dict[str, Any]: ...
+    def get_meta(self, redshift: float) -> Dict[str, Any]:
+        """
+        Fetch this model's metadata dict at the given redshift.
+
+        Parameters
+        ----------
+        redshift : float
+
+        Returns
+        -------
+        dict
+        """
+        ...
 
     def at(self, redshift: float) -> Dataset:
         """Freeze this model at one redshift as a Dataset view."""
@@ -73,6 +99,18 @@ class EpochHaloView(Dataset):
 
     @property
     def subhalos(self) -> "EpochHaloView":
+        """
+        Subhalo table at this view's redshift, as its own EpochHaloView.
+
+        Returns
+        -------
+        EpochHaloView
+
+        Raises
+        ------
+        AttributeError
+            If no subhalo table exists at this redshift.
+        """
         subs = self._model.get_subhalos(self._z)
         if not subs:
             raise AttributeError("No subhalo table at this redshift.")
@@ -86,6 +124,7 @@ class EpochHaloView(Dataset):
 
     @property
     def model(self):
+        """The underlying HaloModel."""
         return self._model
 
 

@@ -85,6 +85,15 @@ class HaloTrack:
 
     @property
     def is_currently_subhalo(self) -> bool:
+        """
+        Whether the halo is a subhalo at the last (most recent) snapshot
+        of the track.
+
+        Returns
+        -------
+        bool
+            False if the track is empty.
+        """
         return bool(self.IsSubhalo[-1]) if len(self) else False
 
     def infall_snapshot(self) -> Optional[Dict[str, Any]]:
@@ -111,6 +120,14 @@ class HaloTrack:
         }
 
     def to_dict(self) -> Dict[str, np.ndarray]:
+        """
+        Flatten the track's core fields and `extra` quantities into a
+        single dict.
+
+        Returns
+        -------
+        dict mapping field name to (N,) or (N, 3) array.
+        """
         d = {
             "SnapNum": self.SnapNum, "Redshift": self.Redshift, "Time": self.Time,
             "Mass": self.Mass, "Pos": self.Pos, "Vel": self.Vel,

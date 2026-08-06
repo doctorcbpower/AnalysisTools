@@ -121,6 +121,14 @@ class GalaxyCatalogue(Dataset):
 
     @property
     def fields(self):
+        """
+        Available field names: the base dataset's fields plus, for
+        model-backed catalogues, all logical SHARK galaxy field names.
+
+        Returns
+        -------
+        list of str, sorted.
+        """
         base = set(super().fields)
         if self._model is not None:
             try:
