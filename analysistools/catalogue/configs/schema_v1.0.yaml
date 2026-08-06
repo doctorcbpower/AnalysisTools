@@ -1,0 +1,408 @@
+# Master science catalogue schema, version 1.0.
+#
+# Transcribed from docs/dorcha_master_catalogue_design.md section 2.2.
+# This is the single source of truth for CatalogueSchema.from_yaml() --
+# validation.SchemaValidator checks a built catalogue against exactly this
+# file, and Documentation/schema.json inside a written catalogue is a
+# direct serialisation of it (see schema.py, pipeline.WriteStage).
+#
+# Field conventions:
+#   group        HDF5 group path (dataset) or logical group (attribute).
+#   dtype        numpy dtype string, or "str" for HDF5 string attrs/datasets.
+#   units        plain-string units (no astropy/unyt -- DEVELOPMENT.md 7.3);
+#                "dimensionless" for unitless quantities.
+#   is_attribute true for values stored as HDF5 group attributes rather
+#                than datasets (Metadata/, Cosmology/, SimulationConfig/).
+#   is_derived   false = read directly from a source ("primary"); true =
+#                computed by a pipeline.PipelineStage from other stored
+#                fields ("derived"). Never recomputed downstream.
+#   shape        trailing shape beyond the row axis; integers for fixed
+#                dims (e.g. 3 for a position vector, 5 for ugriz bands),
+#                or a symbolic name ("n_snap", "n_bins", ...) resolved at
+#                write time against Snapshots/ metadata. Empty for scalars.
+#
+# Companion namespaced groups (MergerTrees/, SelectionFunctions/,
+# CrossMatches/<survey>/, MLClassifications/<model>/, Documentation/) are
+# deliberately not enumerated here -- they are additive/versioned per
+# dataset rather than fixed per-row columns (see docs/master_catalogue.md
+# "Extensibility"); each such addition ships its own schema fragment.
+
+version: "1.0"
+
+fields:
+
+  # --- Metadata/ (attributes) -----------------------------------------
+  - {name: catalogue_version, group: Metadata, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline config,
+     description: "Semantic version MAJOR.MINOR.PATCH of this catalogue build."}
+  - {name: creation_date, group: Metadata, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline,
+     description: "UTC timestamp (ISO 8601) of the build."}
+  - {name: pipeline_git_commit, group: Metadata, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline,
+     description: "Git SHA of analysistools.catalogue at build time."}
+  - {name: random_seed, group: Metadata, dtype: int64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline config,
+     description: "Seed for any stochastic pipeline step."}
+  - {name: n_satellites, group: Metadata, dtype: int64, units: dimensionless,
+     is_attribute: true, is_derived: true, provenance: pipeline,
+     description: "Row count of the Satellites table."}
+  - {name: n_hosts, group: Metadata, dtype: int64, units: dimensionless,
+     is_attribute: true, is_derived: true, provenance: pipeline,
+     description: "Number of independent host haloes (Milky-Way analogues)."}
+  - {name: schema_version, group: Metadata, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline,
+     description: "Schema (not data) version -- matches this file's 'version' key."}
+
+  # --- Cosmology/ (attributes) -----------------------------------------
+  - {name: H0, group: Cosmology, dtype: float64, units: km/s/Mpc,
+     is_attribute: true, is_derived: false, provenance: simulation initial conditions,
+     description: "Hubble constant."}
+  - {name: Omega_m, group: Cosmology, dtype: float64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: simulation initial conditions,
+     description: "Matter density parameter."}
+  - {name: Omega_lambda, group: Cosmology, dtype: float64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: simulation initial conditions,
+     description: "Dark energy density parameter."}
+  - {name: Omega_b, group: Cosmology, dtype: float64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: simulation initial conditions,
+     description: "Baryon density parameter."}
+  - {name: sigma8, group: Cosmology, dtype: float64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: simulation initial conditions,
+     description: "Power spectrum normalisation."}
+  - {name: n_s, group: Cosmology, dtype: float64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: simulation initial conditions,
+     description: "Spectral index."}
+  - {name: little_h, group: Cosmology, dtype: float64, units: dimensionless,
+     is_attribute: true, is_derived: true, provenance: "derived from H0",
+     description: "h = H0 / 100, for unit conversions."}
+
+  # --- SimulationConfig/ (attributes) ----------------------------------
+  - {name: box_size, group: SimulationConfig, dtype: float64, units: Mpc/h,
+     is_attribute: true, is_derived: false, provenance: simulation config,
+     description: "Simulation volume side length."}
+  - {name: particle_mass_dm, group: SimulationConfig, dtype: float64, units: Msun/h,
+     is_attribute: true, is_derived: false, provenance: simulation config,
+     description: "Dark matter particle mass."}
+  - {name: softening_length, group: SimulationConfig, dtype: float64, units: kpc/h,
+     is_attribute: true, is_derived: false, provenance: simulation config,
+     description: "Gravitational softening length."}
+  - {name: n_particles, group: SimulationConfig, dtype: int64, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: simulation config,
+     description: "Total dark matter particle count."}
+  - {name: halo_finder, group: SimulationConfig, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline docs,
+     description: "Halo finder used, e.g. ROCKSTAR, SUBFIND, VELOCIraptor."}
+  - {name: tree_builder, group: SimulationConfig, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: pipeline docs,
+     description: "Merger tree code and version."}
+  - {name: shark_version, group: SimulationConfig, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: SHARK run config,
+     description: "SHARK git tag/commit used (galaxy_backend: shark projects only)."}
+  - {name: shark_parameter_file, group: SimulationConfig, dtype: str, units: dimensionless,
+     is_attribute: true, is_derived: false, provenance: SHARK run config,
+     description: "Path/checksum of the SHARK parameter file used."}
+
+  # --- Snapshots/ (datasets, length N_snap) ----------------------------
+  - {name: snapshot_number, group: Snapshots, dtype: int32, shape: [n_snap],
+     units: dimensionless, is_derived: false, provenance: simulation,
+     description: "Snapshot index."}
+  - {name: redshift, group: Snapshots, dtype: float64, shape: [n_snap],
+     units: dimensionless, is_derived: false, provenance: simulation,
+     description: "Redshift at snapshot."}
+  - {name: scale_factor, group: Snapshots, dtype: float64, shape: [n_snap],
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "a = 1 / (1 + z)."}
+  - {name: cosmic_time, group: Snapshots, dtype: float64, shape: [n_snap],
+     units: Gyr, is_derived: true, provenance: derived from cosmology,
+     description: "Age of the universe at snapshot."}
+  - {name: time_bin_edges_sfh, group: Snapshots, dtype: float64, shape: [n_bins_plus_1],
+     units: Gyr, is_derived: false, provenance: pipeline config,
+     description: "Common lookback-time grid used for all stored star formation histories."}
+
+  # --- Haloes/ (host table) --------------------------------------------
+  - {name: HostHaloID, group: Haloes, dtype: int64, units: dimensionless,
+     is_derived: false, provenance: halo catalogue,
+     description: "Unique host identifier, stable across snapshots."}
+  - {name: Snapshot, group: Haloes, dtype: int32, units: dimensionless,
+     is_derived: false, provenance: halo catalogue,
+     description: "Snapshot of this row."}
+  - {name: M200c, group: Haloes, dtype: float64, units: Msun,
+     is_derived: false, provenance: halo catalogue,
+     description: "Host virial mass (200c definition)."}
+  - {name: R200c, group: Haloes, dtype: float64, units: kpc,
+     is_derived: false, provenance: halo catalogue,
+     description: "Host virial radius."}
+  - {name: Vmax_host, group: Haloes, dtype: float64, units: km/s,
+     is_derived: false, provenance: halo catalogue,
+     description: "Peak circular velocity of the host."}
+  - {name: Position, group: Haloes, dtype: float64, shape: [3],
+     units: "Mpc/h (comoving)", is_derived: false, provenance: halo catalogue,
+     description: "Host position."}
+  - {name: Velocity, group: Haloes, dtype: float64, shape: [3],
+     units: "km/s (peculiar)", is_derived: false, provenance: halo catalogue,
+     description: "Host bulk velocity."}
+  - {name: IsIsolated, group: Haloes, dtype: bool, units: dimensionless,
+     is_derived: true, provenance: "isolation algorithm v1",
+     description: "No more massive halo within N x R200c."}
+  - {name: IsPaired, group: Haloes, dtype: bool, units: dimensionless,
+     is_derived: true, provenance: "pairing algorithm v1",
+     description: "Local-Group-analogue pairing flag."}
+  - {name: PairedHostID, group: Haloes, dtype: int64, units: dimensionless,
+     is_derived: true, provenance: derived,
+     description: "ID of paired companion host, -1 if none."}
+  - {name: N_satellites_total, group: Haloes, dtype: int32, units: dimensionless,
+     is_derived: true, provenance: derived,
+     description: "Count of satellites above the completeness limit."}
+  - {name: AccretionHistory_M200c, group: Haloes, dtype: float64, shape: [n_snap],
+     units: Msun, is_derived: true, provenance: derived from merger tree,
+     description: "Host mass growth history."}
+
+  # --- Satellites/Identification/ --------------------------------------
+  - {name: SatelliteID, group: Satellites/Identification, dtype: int64,
+     units: dimensionless, is_derived: false, provenance: "assigned at catalogue construction",
+     description: "Unique, permanent ID; primary key of the whole table."}
+  - {name: HostHaloID, group: Satellites/Identification, dtype: int64,
+     units: dimensionless, is_derived: true, provenance: cross-match stage,
+     description: "Foreign key into Haloes/."}
+  - {name: MergerTreeID, group: Satellites/Identification, dtype: int64,
+     units: dimensionless, is_derived: false, provenance: tree builder,
+     description: "Foreign key into MergerTrees/."}
+  - {name: SubhaloID_z0, group: Satellites/Identification, dtype: int64,
+     units: dimensionless, is_derived: false, provenance: halo catalogue,
+     description: "Native subhalo finder ID at z=0."}
+  - {name: SharkGalaxyID, group: Satellites/Identification, dtype: int64,
+     units: dimensionless, is_derived: true, provenance: cross-match stage,
+     description: "Foreign key into the SHARK output (galaxy_backend: shark only)."}
+  - {name: Snapshot, group: Satellites/Identification, dtype: int32,
+     units: dimensionless, is_derived: false, provenance: pipeline,
+     description: "Snapshot of the reported (typically z=0) properties."}
+  - {name: SatelliteName, group: Satellites/Identification, dtype: str,
+     units: dimensionless, is_derived: false, provenance: "manual/observational cross-match",
+     description: "Common name, if matched to a known real dwarf (optional)."}
+
+  # --- Satellites/HaloProperties/ ---------------------------------------
+  - {name: M200c_z0, group: Satellites/HaloProperties, dtype: float64, units: Msun,
+     is_derived: false, provenance: halo catalogue,
+     description: "Present-day virial mass."}
+  - {name: Mpeak, group: Satellites/HaloProperties, dtype: float64, units: Msun,
+     is_derived: true, provenance: derived from merger tree,
+     description: "Peak halo mass over the full history."}
+  - {name: SnapshotAtMpeak, group: Satellites/HaloProperties, dtype: int32,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "Snapshot at which Mpeak occurred."}
+  - {name: R200c_z0, group: Satellites/HaloProperties, dtype: float64, units: kpc,
+     is_derived: false, provenance: halo catalogue,
+     description: "Present-day virial radius."}
+  - {name: Vpeak, group: Satellites/HaloProperties, dtype: float64, units: km/s,
+     is_derived: true, provenance: derived from merger tree,
+     description: "Peak circular velocity over the history."}
+  - {name: Vmax_z0, group: Satellites/HaloProperties, dtype: float64, units: km/s,
+     is_derived: false, provenance: halo catalogue,
+     description: "Present-day peak circular velocity."}
+  - {name: Minfall, group: Satellites/HaloProperties, dtype: float64, units: Msun,
+     is_derived: true, provenance: derived from merger tree,
+     description: "Halo mass at infall (first crossing of host R200c)."}
+  - {name: Vinfall, group: Satellites/HaloProperties, dtype: float64, units: km/s,
+     is_derived: true, provenance: derived from merger tree,
+     description: "Vmax at infall."}
+  - {name: RedshiftInfall, group: Satellites/HaloProperties, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: derived from merger tree,
+     description: "Redshift of infall."}
+  - {name: SnapshotInfall, group: Satellites/HaloProperties, dtype: int32,
+     units: dimensionless, is_derived: true, provenance: derived from merger tree,
+     description: "Snapshot of infall."}
+  - {name: NumberOfInfalls, group: Satellites/HaloProperties, dtype: int16,
+     units: dimensionless, is_derived: true, provenance: derived from merger tree,
+     description: "Count of host-crossing events (backsplash tracking)."}
+  - {name: IsBacksplash, group: Satellites/HaloProperties, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "Currently outside R200c having previously fallen in."}
+  - {name: OrbitalPericentre, group: Satellites/HaloProperties, dtype: float64,
+     units: kpc, is_derived: true, provenance: "orbit-fitting algorithm v1",
+     description: "Estimated pericentric distance."}
+  - {name: OrbitalApocentre, group: Satellites/HaloProperties, dtype: float64,
+     units: kpc, is_derived: true, provenance: "orbit-fitting algorithm v1",
+     description: "Estimated apocentric distance."}
+  - {name: OrbitalEccentricity, group: Satellites/HaloProperties, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "(apo - peri) / (apo + peri)."}
+  - {name: OrbitalPeriod, group: Satellites/HaloProperties, dtype: float64,
+     units: Gyr, is_derived: true, provenance: "orbit-fitting algorithm v1",
+     description: "Estimated radial orbital period."}
+  - {name: OrbitalEnergy, group: Satellites/HaloProperties, dtype: float64,
+     units: (km/s)^2, is_derived: true, provenance: derived,
+     description: "Specific orbital energy at infall."}
+  - {name: OrbitalAngularMomentum, group: Satellites/HaloProperties, dtype: float64,
+     shape: [3], units: kpc km/s, is_derived: true, provenance: derived,
+     description: "Specific angular momentum vector at infall."}
+  - {name: TidalTrackClass, group: Satellites/HaloProperties, dtype: int8,
+     units: dimensionless, is_derived: true, provenance: "tidal-tracks model",
+     description: "Categorical tidal-stripping stage (see Documentation/enumerations.json)."}
+
+  # --- Satellites/GalaxyProperties/ --------------------------------------
+  - {name: StellarMass, group: Satellites/GalaxyProperties, dtype: float64, units: Msun,
+     is_derived: false, provenance: galaxy_backend,
+     description: "Total stellar mass."}
+  - {name: LuminosityV, group: Satellites/GalaxyProperties, dtype: float64,
+     units: "Lsun (V-band)", is_derived: false, provenance: "galaxy_backend / SPS model",
+     description: "V-band luminosity."}
+  - {name: Luminosity_ugriz, group: Satellites/GalaxyProperties, dtype: float64,
+     shape: [5], units: "Lsun (per band)", is_derived: false,
+     provenance: "galaxy_backend / SPS model", description: "Multi-band luminosities."}
+  - {name: AbsoluteMagnitude_ugriz, group: Satellites/GalaxyProperties, dtype: float64,
+     shape: [5], units: mag, is_derived: true, provenance: derived from luminosities,
+     description: "Absolute magnitudes."}
+  - {name: GasMass_Cold, group: Satellites/GalaxyProperties, dtype: float64, units: Msun,
+     is_derived: false, provenance: galaxy_backend, description: "Cold gas mass."}
+  - {name: GasMass_Hot, group: Satellites/GalaxyProperties, dtype: float64, units: Msun,
+     is_derived: false, provenance: galaxy_backend,
+     description: "Hot gas mass (if resolved)."}
+  - {name: MetallicityStellar, group: Satellites/GalaxyProperties, dtype: float64,
+     units: "dimensionless (Z or [Fe/H])", is_derived: false, provenance: galaxy_backend,
+     description: "Mass-weighted mean stellar metallicity."}
+  - {name: MetallicityGas, group: Satellites/GalaxyProperties, dtype: float64,
+     units: dimensionless, is_derived: false, provenance: galaxy_backend,
+     description: "Cold gas-phase metallicity."}
+  - {name: StarFormationRate, group: Satellites/GalaxyProperties, dtype: float64,
+     units: Msun/yr, is_derived: false, provenance: galaxy_backend,
+     description: "Instantaneous star formation rate."}
+  - {name: SFH, group: Satellites/GalaxyProperties, dtype: float32, shape: [n_bins],
+     units: "Msun/yr per bin", is_derived: true, provenance: "galaxy_backend, rebinned",
+     description: "Star formation history on the common time grid."}
+  - {name: MeanStellarAge, group: Satellites/GalaxyProperties, dtype: float64,
+     units: Gyr, is_derived: true, provenance: derived from SFH,
+     description: "Mass-weighted mean stellar age."}
+  - {name: QuenchingTime, group: Satellites/GalaxyProperties, dtype: float64,
+     units: "Gyr (lookback)", is_derived: true, provenance: derived from SFH,
+     description: "Time SFR permanently fell below threshold x sSFR_MS."}
+  - {name: IsQuenched_z0, group: Satellites/GalaxyProperties, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "sSFR below threshold at z=0."}
+  - {name: HalfLightRadius, group: Satellites/GalaxyProperties, dtype: float64,
+     units: kpc, is_derived: false, provenance: "galaxy_backend / structural model",
+     description: "Projected half-light radius."}
+  - {name: HalfMassRadiusStellar, group: Satellites/GalaxyProperties, dtype: float64,
+     units: kpc, is_derived: false, provenance: galaxy_backend,
+     description: "3D stellar half-mass radius."}
+  - {name: SersicIndex, group: Satellites/GalaxyProperties, dtype: float64,
+     units: dimensionless, is_derived: false, provenance: "galaxy_backend / image fitting",
+     description: "Structural fit parameter, if available."}
+  - {name: BlackHoleMass, group: Satellites/GalaxyProperties, dtype: float64,
+     units: Msun, is_derived: false, provenance: galaxy_backend,
+     description: "Supermassive black hole mass, if tracked."}
+
+  # --- Satellites/DorchaProperties/ (project-specific; omit from
+  #     derived_stages for non-Dorcha / non-particle-tagged projects) -----
+  - {name: ProgenitorParticleFraction, group: Satellites/DorchaProperties, dtype: float64,
+     units: "dimensionless (0-1)", is_derived: true,
+     provenance: "particle tagging + progenitor-field analysis",
+     description: "Fraction of z=0 bound particles traced to a single progenitor."}
+  - {name: EarliestProgenitorRedshift, group: Satellites/DorchaProperties, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: "merger tree + particle tagging",
+     description: "Highest-z snapshot at which a resolved progenitor exists."}
+  - {name: PeakOverdensity, group: Satellites/DorchaProperties, dtype: float64,
+     units: "dimensionless (delta)", is_derived: true, provenance: progenitor-field analysis,
+     description: "Peak local overdensity experienced by progenitor particles."}
+  - {name: FormationEnvironmentClass, group: Satellites/DorchaProperties, dtype: int8,
+     units: dimensionless, is_derived: true, provenance: "environment classifier",
+     description: "Enumerated formation environment (see Documentation/enumerations.json)."}
+  - {name: FossilFraction, group: Satellites/DorchaProperties, dtype: float64,
+     units: "dimensionless (0-1)", is_derived: true, provenance: "derived from SFH + reionisation model",
+     description: "Fraction of stellar mass formed before reionisation (definition documented)."}
+  - {name: NumberOfMergers, group: Satellites/DorchaProperties, dtype: int16,
+     units: dimensionless, is_derived: true, provenance: merger tree,
+     description: "Count of resolved mergers in this object's own history."}
+  - {name: MassAccretionRateDM, group: Satellites/DorchaProperties, dtype: float64,
+     shape: [n_snap], units: Msun/Gyr, is_derived: true, provenance: merger tree,
+     description: "Dark matter accretion history."}
+
+  # --- Satellites/ParticleTags/ (CSR layout; project-specific) -----------
+  - {name: particle_id_offsets, group: Satellites/ParticleTags, dtype: int64,
+     shape: [n_plus_1], units: dimensionless, is_derived: false, provenance: particle tagging,
+     description: "CSR-style offsets into particle_ids for each satellite."}
+  - {name: particle_ids, group: Satellites/ParticleTags, dtype: int64,
+     shape: [n_total_tagged], units: dimensionless, is_derived: false, provenance: particle tagging,
+     description: "Concatenated tagged particle IDs across all satellites."}
+  - {name: particle_tag_confidence, group: Satellites/ParticleTags, dtype: float32,
+     shape: [n_total_tagged], units: dimensionless, is_derived: false, provenance: particle tagging,
+     description: "Per-particle tagging confidence score, if available."}
+
+  # --- Satellites/Environment/ --------------------------------------------
+  - {name: HostIsIsolated, group: Satellites/Environment, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: "join from Haloes/",
+     description: "Copy-through of the host's isolation flag (query convenience)."}
+  - {name: HostIsPaired, group: Satellites/Environment, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: "join from Haloes/",
+     description: "Copy-through of the host's pairing flag."}
+  - {name: LocalNumberDensity, group: Satellites/Environment, dtype: float64,
+     units: "Mpc^-3 (comoving)", is_derived: true, provenance: "environment estimator v1",
+     description: "Number density of neighbouring haloes above a mass threshold within a fixed aperture."}
+  - {name: DistanceToNearestMassiveNeighbour, group: Satellites/Environment, dtype: float64,
+     units: Mpc, is_derived: true, provenance: derived,
+     description: "Distance to nearest halo above threshold mass outside the host."}
+  - {name: TidalIndex, group: Satellites/Environment, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "Karachentsev-style tidal index from neighbouring haloes."}
+  - {name: CosmicWebClass, group: Satellites/Environment, dtype: int8,
+     units: dimensionless, is_derived: true, provenance: "cosmic web classifier (e.g. T-web/V-web)",
+     description: "Enumerated node/filament/sheet/void classification at the satellite's position."}
+
+  # --- Satellites/Observability/ ------------------------------------------
+  - {name: HeliocentricDistance, group: Satellites/Observability, dtype: float64,
+     units: kpc, is_derived: true, provenance: "mock observer placement",
+     description: "Distance from the mock solar position."}
+  - {name: GalactocentricRadius, group: Satellites/Observability, dtype: float64,
+     units: kpc, is_derived: true, provenance: derived,
+     description: "3D distance from the host centre."}
+  - {name: GalacticLongitude, group: Satellites/Observability, dtype: float64,
+     units: deg, is_derived: true, provenance: "mock observer placement",
+     description: "Galactic longitude, l."}
+  - {name: GalacticLatitude, group: Satellites/Observability, dtype: float64,
+     units: deg, is_derived: true, provenance: "mock observer placement",
+     description: "Galactic latitude, b."}
+  - {name: RA, group: Satellites/Observability, dtype: float64, units: deg,
+     is_derived: true, provenance: derived,
+     description: "Right ascension, if a fixed mock sky orientation is used."}
+  - {name: Dec, group: Satellites/Observability, dtype: float64, units: deg,
+     is_derived: true, provenance: derived,
+     description: "Declination, if a fixed mock sky orientation is used."}
+  - {name: ApparentMagnitude_ugriz, group: Satellites/Observability, dtype: float64,
+     shape: [5], units: mag, is_derived: true, provenance: "derived from luminosity + distance",
+     description: "Apparent magnitudes given heliocentric distance."}
+  - {name: SurfaceBrightness_V, group: Satellites/Observability, dtype: float64,
+     units: mag/arcsec^2, is_derived: true,
+     provenance: "derived from luminosity + half-light radius + distance",
+     description: "Mean surface brightness within the half-light radius."}
+  - {name: RubinDetectionProbability, group: Satellites/Observability, dtype: float64,
+     units: "dimensionless (0-1)", is_derived: true, provenance: "Rubin/LSST selection function model",
+     description: "Detection probability from the survey selection function."}
+  - {name: RubinCoaddDepth_r, group: Satellites/Observability, dtype: float64,
+     units: mag, is_derived: false, provenance: "selection function input",
+     description: "Assumed local coadd depth used in the detection calculation."}
+  - {name: CompletenessWeight, group: Satellites/Observability, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "1 / P_detect, capped, for completeness-corrected statistics."}
+  - {name: SurveyFootprintFlag, group: Satellites/Observability, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: "selection function",
+     description: "Falls within the assumed survey footprint."}
+
+  # --- Satellites/DerivedQuantities/ (cross-cutting convenience fields) ---
+  - {name: StellarMassHaloMassRatio, group: Satellites/DerivedQuantities, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "StellarMass / Mpeak."}
+  - {name: MassLossFraction, group: Satellites/DerivedQuantities, dtype: float64,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "1 - M200c_z0 / Mpeak."}
+  - {name: DynamicalMassWithinHalfLight, group: Satellites/DerivedQuantities, dtype: float64,
+     units: Msun, is_derived: true, provenance: "mass estimator (e.g. Wolf et al.)",
+     description: "Mass estimator within the half-light radius."}
+  - {name: MeanDensityWithinHalfLight, group: Satellites/DerivedQuantities, dtype: float64,
+     units: Msun/kpc^3, is_derived: true, provenance: derived,
+     description: "Companion quantity to DynamicalMassWithinHalfLight."}
+  - {name: IsUltraFaint, group: Satellites/DerivedQuantities, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "Convenience flag: LuminosityV < 1e5 Lsun."}
+  - {name: IsClassical, group: Satellites/DerivedQuantities, dtype: bool,
+     units: dimensionless, is_derived: true, provenance: derived,
+     description: "Convenience flag matching the classical-dSph luminosity range."}

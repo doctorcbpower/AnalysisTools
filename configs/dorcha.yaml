@@ -1,0 +1,31 @@
+# Example project config for analysistools.catalogue.CatalogueBuilder
+# (Phase 6, docs/master_catalogue.md "template mechanism").
+#
+# This file is a template, not part of the installed package -- copy it
+# per project (e.g. configs/futurehydro.yaml) and change galaxy_backend /
+# derived_stages, not the pipeline code.
+
+project: dorcha
+schema_version: "1.0"          # -> analysistools.catalogue.schema.default_schema("1.0")
+
+galaxy_backend: shark           # shark | hydro (backends.py)
+galaxy_backend_options:
+  match_by: position            # SharkGalaxyBackend: position | id
+  r_scale: 1.0
+
+derived_stages:                 # names resolve via derived.STAGES; order matters
+  - halo_properties
+  - orbital_properties
+  - star_formation_history
+  - environment
+  - observability
+  - dorcha_specific              # particle-tagging-derived fields; omit for
+                                  # projects with no particle tagging
+
+units:
+  length: cMpc/h
+  mass: Msun/h
+  velocity: km/s
+
+output:
+  path_template: "dorcha_catalogue_v{version}.h5"

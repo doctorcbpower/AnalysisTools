@@ -26,6 +26,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for the roadmap towards a unified interface
 |------|----------|
 | `analysistools/` | Core package: snapshot, halo catalogue, merger tree, profile, gridding, rendering, FDM tools; unified `api/` layer |
 | `analysistools/shark/` | SHARK semi-analytic catalogue tools: `SharkModel` (lazy reader), `Analysis`, `Plotter`, CLI, fsps-based photometry |
+| `analysistools/catalogue/` | Master science catalogue pipeline (design skeleton, Phase 6): builds a versioned, self-describing HDF5 catalogue per project, read back via `api.CatalogueDataset`/`at.load()` — see [docs/master_catalogue.md](docs/master_catalogue.md) |
 | `shark/` | Deprecated import shim → `analysistools.shark` |
 | `docs/` | Per-topic usage guides (see Documentation below) |
 | `data/` | Small example data: `snap_0031.hdf5`, VELOCIraptor walkable trees, `halos/` catalogues |
@@ -97,6 +98,7 @@ The unified interface is summarised below; everything else is a per-topic guide 
 | FDM field snapshots (`FDMFieldTools`) | [docs/fdm.md](docs/fdm.md) |
 | SHARK semi-analytic catalogues (`shark` package) | [docs/shark.md](docs/shark.md) |
 | Unified `Dataset`/`Simulation` interface (full example) | [docs/unified_interface.md](docs/unified_interface.md) |
+| Master science catalogues (`analysistools.catalogue`, design skeleton) | [docs/master_catalogue.md](docs/master_catalogue.md), full schema in [docs/dorcha_master_catalogue_design.md](docs/dorcha_master_catalogue_design.md) |
 
 All of the per-class API below remains fully supported -- the unified interface is a layer on top of these classes, and `ds.backend` always exposes the underlying object. Prefer the unified interface for new work.
 

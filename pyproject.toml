@@ -30,6 +30,7 @@ rendering = [
     "vortrace @ git+https://github.com/gusbeane/vortrace",  # render_tools.VortraceRenderer
     "pyyaml",                                                # render_tools.ImbasRenderer.write_config
 ]
+catalogue = ["pyyaml"]        # analysistools.catalogue.schema (YAML schema/project configs)
 # imbas_renderer itself (https://github.com/doctorcbpower/imbas_renderer) is a
 # compiled C executable, not pip-installable -- build it separately and put
 # render_image on PATH, or pass executable=<path> to ImbasRenderer.
@@ -39,6 +40,9 @@ Repository = "https://github.com/doctorcbpower/AnalysisTools"
 
 [tool.setuptools.packages.find]
 include = ["analysistools*", "shark*"]
+
+[tool.setuptools.package-data]
+"analysistools.catalogue" = ["configs/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

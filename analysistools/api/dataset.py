@@ -89,6 +89,19 @@ FIELD_ALIASES: Dict[str, Dict[str, Union[Sequence[str], Callable]]] = {
         "mbh": ("m_bh", "mbh"),
         "radius": ("rstar_disk",),
     },
+    "satellites": {
+        # Master science catalogues (analysistools.catalogue,
+        # DEVELOPMENT.md Phase 6). Field names are the catalogue's own
+        # (already standardised at build time -- see
+        # docs/dorcha_master_catalogue_design.md section 2.2), so aliases
+        # here just bridge the cross-kind vocabulary shared with halos/
+        # galaxies for code that treats a catalogue like any other Dataset
+        # (e.g. api/plotting.py's mass_function).
+        "id":     ("SatelliteID",),
+        "mass":   ("StellarMass",),
+        "halo_id": ("HostHaloID",),
+        "radius": ("HalfLightRadius",),
+    },
 }
 
 

@@ -19,19 +19,21 @@ from .snapshot import SnapshotDataset
 from .halos import HaloCatalogue
 from .trees import MergerTree, TrackDataset
 from .galaxies import GalaxyCatalogue
+from .catalogue import CatalogueDataset
 from .epoch import EpochModel, EpochHaloView, at
 from .simulation import Simulation, Epoch, match_positions
 from . import plotting
 
 __all__ = ["load", "Dataset", "SnapshotDataset", "HaloCatalogue",
            "MergerTree", "TrackDataset", "GalaxyCatalogue",
+           "CatalogueDataset",
            "EpochModel", "EpochHaloView", "at",
            "Simulation", "Epoch", "match_positions", "plotting",
            "FIELD_ALIASES"]
 
 #: kinds load() understands today; "field" (FDM) arrives in later work
 #: (see DEVELOPMENT.md section 5).
-_SUPPORTED_KINDS = ("snapshot", "halos", "tree", "galaxies")
+_SUPPORTED_KINDS = ("snapshot", "halos", "tree", "galaxies", "satellites")
 
 
 def _sniff_hdf5(path: str):
@@ -47,6 +49,10 @@ def _sniff_hdf5(path: str):
             if "Parameters" in keys and "Omega0" in f["Parameters"].attrs:
                 return "snapshot", "HDF5", "GADGET4"    # GADGET-4 / AREPO
             return "snapshot", "HDF5", "GADGET2/3"
+
+        # --- master science catalogue (analysistools.catalogue) ---
+        if "Satellites" in keys:
+            return "satellites", "HDF5-catalogue", None
 
         # --- SHARK galaxies ---
         if "galaxies" in keys:
@@ -151,6 +157,8 @@ def load(path: str, kind: Optional[str] = None,
                           label=label, **kwargs)
     if kind == "galaxies":
         return GalaxyCatalogue(path, label=label, **kwargs)
+    if kind == "satellites":
+        return CatalogueDataset(path, label=label, **kwargs)
     if kind == "field":
         raise NotImplementedError(
             "kind='field' (FDM mesh data) is planned for future work (see "
