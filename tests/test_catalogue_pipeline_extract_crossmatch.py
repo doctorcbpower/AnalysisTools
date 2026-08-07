@@ -118,6 +118,19 @@ def test_halo_extract_records_provenance(epoch, host_and_satellite_rows):
     ]
 
 
+@needs_data
+def test_halo_extract_records_comoving_little_h_meta(
+        epoch, host_and_satellite_rows):
+    # read by validation.SchemaValidator's little-h/comoving cross-check
+    host_row, satellite_rows = host_and_satellite_rows
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+
+    state = context.meta["comoving_little_h"]["Haloes"]
+    assert state["comoving"] == epoch.halos.meta.get("comoving")
+    assert state["little_h"] == epoch.halos.meta.get("little_h")
+
+
 def test_halo_extract_raises_on_empty_satellite_rows():
     stage = HaloExtractStage(SimpleNamespace(halos=object()), 0, [])
     with pytest.raises(RuntimeError, match="satellite_rows is empty"):
@@ -343,6 +356,38 @@ def test_galaxy_backend_without_epoch_warns_and_skips(
     assert backend.calls == []
     assert not any(k.startswith("Satellites/GalaxyProperties/")
                    for k in result.columns)
+
+
+@needs_data
+def test_cross_match_records_comoving_little_h_meta_when_backend_supports_it(
+        epoch, host_and_satellite_rows):
+    class _FakeBackendWithNativeState(_FakeGalaxyBackend):
+        def native_comoving_little_h(self, epoch):
+            return True, False
+
+    host_row, satellite_rows = host_and_satellite_rows
+    backend = _FakeBackendWithNativeState(
+        {row: {"StellarMass": 1e9} for row in satellite_rows})
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+    result = CrossMatchStage(galaxy_backend=backend, epoch=epoch).run(context)
+
+    state = result.meta["comoving_little_h"]["Satellites/GalaxyProperties"]
+    assert state == {"comoving": True, "little_h": False}
+
+
+@needs_data
+def test_cross_match_skips_comoving_little_h_meta_when_backend_lacks_method(
+        epoch, host_and_satellite_rows):
+    host_row, satellite_rows = host_and_satellite_rows
+    backend = _FakeGalaxyBackend(  # no native_comoving_little_h method
+        {row: {"StellarMass": 1e9} for row in satellite_rows})
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+    result = CrossMatchStage(galaxy_backend=backend, epoch=epoch).run(context)
+
+    assert "Satellites/GalaxyProperties" not in \
+        result.meta.get("comoving_little_h", {})
 
 
 def test_galaxy_backend_without_halo_extract_first_warns_and_skips(caplog):

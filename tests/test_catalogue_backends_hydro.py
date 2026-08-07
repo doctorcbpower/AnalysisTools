@@ -249,6 +249,28 @@ def test_sfh_bins_formation_mass_by_lookback_age():
     np.testing.assert_allclose(result, expected)
 
 
+def test_native_comoving_little_h_reads_epoch_snapshot_meta():
+    class _FakeSnapshot:
+        meta = {"comoving": True, "little_h": False}
+
+    class _EpochWithSnapshot:
+        snapshot = _FakeSnapshot()
+
+    result = HydroGalaxyBackend().native_comoving_little_h(
+        epoch=_EpochWithSnapshot())
+    assert result == (True, False)
+
+
+def test_native_comoving_little_h_none_without_snapshot():
+    class _EpochNoSnapshot:
+        snapshot = None
+
+    assert HydroGalaxyBackend().native_comoving_little_h(
+        epoch=_EpochNoSnapshot()) == (None, None)
+    assert HydroGalaxyBackend().native_comoving_little_h(epoch=None) == \
+        (None, None)
+
+
 def test_sfh_falls_back_to_mass_when_no_initmass():
     stars = _FakeStars({
         "pos": [[0, 0, 0]], "mass": [1.0e5], "age": [0.999],

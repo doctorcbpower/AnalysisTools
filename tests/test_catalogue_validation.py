@@ -138,7 +138,7 @@ def test_validator_name(validator_cls, expected_name):
 
 
 @pytest.mark.parametrize("validator_cls", [
-    SchemaValidator, IntegrityValidator, PhysicalValidator,
+    IntegrityValidator, PhysicalValidator,
 ])
 def test_validator_check_not_yet_implemented(validator_cls):
     with pytest.raises(NotImplementedError, match="Phase 6c"):

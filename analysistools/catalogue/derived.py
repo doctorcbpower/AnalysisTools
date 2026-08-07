@@ -413,17 +413,21 @@ class EnvironmentStage(PipelineStage):
     - ``CosmicWebClass``: needs an actual web classifier (T-web/V-web or
       similar) -- a substantial separate piece of machinery, not a
       neighbour-counting operation.
-    - ``HostIsIsolated``/``HostIsPaired``: copy-through of
-      ``Haloes/IsIsolated``/``Haloes/IsPaired``, neither of which exists
-      yet -- no host-level isolation/pairing algorithm is implemented
-      anywhere in this pipeline (that belongs to ``Haloes/`` table
-      construction, not this stage).
+
+    ``HostIsIsolated``/``HostIsPaired`` *are* computed here, but only as a
+    copy-through: if ``HostEnvironmentStage`` has already run (and
+    populated ``Haloes/IsIsolated``/``IsPaired``), its single host-level
+    value is broadcast onto every satellite row. If it hasn't run, these
+    two columns are simply omitted (not NaN-filled -- there is nothing to
+    copy).
     """
 
     name = "environment"
     inputs = ("Satellites/_internal/pos_z0", "Satellites/_internal/halo_row")
     outputs = ("Satellites/Environment/LocalNumberDensity",
-               "Satellites/Environment/DistanceToNearestMassiveNeighbour")
+               "Satellites/Environment/DistanceToNearestMassiveNeighbour",
+               "Satellites/Environment/HostIsIsolated",
+               "Satellites/Environment/HostIsPaired")
 
     def __init__(self, epoch, host_row: int, mass_threshold: float,
                  aperture_radius: float):
@@ -480,10 +484,144 @@ class EnvironmentStage(PipelineStage):
             "Satellites/Environment/DistanceToNearestMassiveNeighbour"] = \
             distance_to_nearest
 
+        host_isolated = context.columns.get("Haloes/IsIsolated")
+        host_paired = context.columns.get("Haloes/IsPaired")
+        if host_isolated is not None:
+            context.columns["Satellites/Environment/HostIsIsolated"] = \
+                np.full(n, bool(np.asarray(host_isolated)[0]))
+        if host_paired is not None:
+            context.columns["Satellites/Environment/HostIsPaired"] = \
+                np.full(n, bool(np.asarray(host_paired)[0]))
+
         context.record_stage(self.name, n_satellites=n,
                              n_neighbours=int(neighbour_pos.shape[0]),
                              mass_threshold=self.mass_threshold,
                              aperture_radius=self.aperture_radius)
+        return context
+
+
+class HostEnvironmentStage(PipelineStage):
+    """``Haloes/IsIsolated``, ``IsPaired``, ``PairedHostID``,
+    ``N_satellites_total`` -- host-level fields (``Haloes/`` is a
+    one-host-per-pipeline-run table, see ``pipeline.HaloExtractStage``),
+    computed from the *other* halos in ``Epoch.halos``, the same neighbour
+    source ``EnvironmentStage`` uses for its per-satellite fields. Distinct
+    from that stage (which is per-satellite and deliberately does *not*
+    compute these -- see its own docstring) and from ``Satellites/
+    Environment/HostIsIsolated``/``HostIsPaired`` (a copy-through of this
+    stage's output onto every satellite row, done by ``EnvironmentStage``
+    when this stage has already run).
+
+    Every definition below is explicit and driven entirely by required
+    constructor arguments -- no default is picked -- per the design doc's
+    "explicit ownership of ambiguous definitions" principle (isolation and
+    pairing both admittedly have more than one reasonable convention in
+    the literature):
+
+    - ``IsIsolated``: True iff no *other* halo in ``Epoch.halos`` more
+      massive than this host lies within
+      ``isolation_radius_factor * R200c_host`` of the host's position.
+    - ``IsPaired`` / ``PairedHostID``: True iff at least one *other* halo
+      (any of these can also count towards ``IsIsolated``'s "more massive"
+      neighbour -- the two flags are independent, not mutually exclusive)
+      has mass within ``[pairing_mass_ratio_min, 1/pairing_mass_ratio_min]``
+      times the host's own mass, and lies within
+      ``pairing_max_separation`` -- a symmetric "roughly comparable mass,
+      roughly Local-Group-analogue separation" criterion. ``PairedHostID``
+      is that halo's native ``halo_id`` (from ``Epoch.halos``), or -1 if
+      none. If more than one halo satisfies the criterion, the nearest is
+      stored and a warning is logged (the schema field is scalar, so it
+      cannot represent an ambiguous multi-way pairing).
+    - ``N_satellites_total``: count of *other* halos within
+      ``isolation_radius_factor * R200c_host`` with mass >=
+      ``completeness_mass_threshold`` -- independent of whichever
+      satellite subset the caller passed to ``HaloExtractStage`` (that is
+      a user selection of *which* satellites get full per-object
+      processing, not necessarily the full completeness-limited
+      population this field reports).
+
+    Units caveat (same as ``HaloExtractStage``): computed in whatever
+    length/mass units the Epoch's ``HaloCatalogue`` was configured with,
+    not necessarily schema.py's declared units.
+    """
+
+    name = "host_environment"
+    inputs = ("Haloes/HostHaloID", "Haloes/M200c", "Haloes/R200c",
+             "Haloes/Position")
+    outputs = ("Haloes/IsIsolated", "Haloes/IsPaired",
+              "Haloes/PairedHostID", "Haloes/N_satellites_total")
+
+    def __init__(self, epoch, host_row: int, isolation_radius_factor: float,
+                 pairing_mass_ratio_min: float, pairing_max_separation: float,
+                 completeness_mass_threshold: float):
+        self.epoch = epoch
+        self.host_row = int(host_row)
+        self.isolation_radius_factor = float(isolation_radius_factor)
+        self.pairing_mass_ratio_min = float(pairing_mass_ratio_min)
+        self.pairing_max_separation = float(pairing_max_separation)
+        self.completeness_mass_threshold = float(completeness_mass_threshold)
+
+    def run(self, context):
+        halos = self.epoch.halos
+        if halos is None:
+            raise RuntimeError(
+                f"Stage '{self.name}': this Epoch has no halo catalogue.")
+
+        mass = np.asarray(halos["mass"])
+        pos = np.asarray(halos["pos"])
+        halo_id = np.asarray(halos["halo_id"])
+        boxsize = self.epoch.boxsize
+
+        host_mass = float(np.asarray(context.columns["Haloes/M200c"])[0])
+        host_r200c = float(np.asarray(context.columns["Haloes/R200c"])[0])
+        host_pos = np.asarray(context.columns["Haloes/Position"])[0]
+
+        others = np.ones(len(mass), dtype=bool)
+        others[self.host_row] = False
+
+        dpos = periodic_delta(pos - host_pos, boxsize)
+        dist = np.linalg.norm(dpos, axis=1)
+
+        isolation_radius = self.isolation_radius_factor * host_r200c
+        within_isolation = others & (dist <= isolation_radius)
+
+        is_isolated = not bool(np.any(within_isolation & (mass > host_mass)))
+        n_satellites_total = int(np.count_nonzero(
+            within_isolation & (mass >= self.completeness_mass_threshold)))
+
+        ratio_lo = self.pairing_mass_ratio_min
+        ratio_hi = (1.0 / self.pairing_mass_ratio_min
+                   if self.pairing_mass_ratio_min > 0 else np.inf)
+        mass_ratio = mass / host_mass
+        pairing_candidates = (others & (dist <= self.pairing_max_separation)
+                              & (mass_ratio >= ratio_lo)
+                              & (mass_ratio <= ratio_hi))
+        n_candidates = int(np.count_nonzero(pairing_candidates))
+
+        is_paired = n_candidates > 0
+        paired_host_id = -1
+        if is_paired:
+            cand_idx = np.flatnonzero(pairing_candidates)
+            nearest = cand_idx[np.argmin(dist[cand_idx])]
+            paired_host_id = int(halo_id[nearest])
+            if n_candidates > 1:
+                logger.warning(
+                    "%s: %d halos satisfy the pairing criterion for this "
+                    "host; PairedHostID stores only the nearest (id=%d) "
+                    "since the schema field is scalar.",
+                    self.name, n_candidates, paired_host_id)
+
+        context.columns["Haloes/IsIsolated"] = np.asarray([is_isolated])
+        context.columns["Haloes/IsPaired"] = np.asarray([is_paired])
+        context.columns["Haloes/PairedHostID"] = np.asarray(
+            [paired_host_id], dtype=np.int64)
+        context.columns["Haloes/N_satellites_total"] = np.asarray(
+            [n_satellites_total], dtype=np.int32)
+
+        context.record_stage(self.name, is_isolated=is_isolated,
+                             is_paired=is_paired,
+                             n_satellites_total=n_satellites_total,
+                             n_pairing_candidates=n_candidates)
         return context
 
 
@@ -691,6 +829,7 @@ STAGES = {
     "halo_properties": HaloPropertiesStage,
     "orbital_properties": OrbitalPropertiesStage,
     "star_formation_history": StarFormationHistoryStage,
+    "host_environment": HostEnvironmentStage,
     "environment": EnvironmentStage,
     "observability": ObservabilityStage,
     "dorcha_specific": DorchaSpecificStage,

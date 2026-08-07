@@ -52,6 +52,7 @@ _TWO_GALAXIES = {
     "mhot": [3e9, 4e9],
     "sfr": [0.5, 1.2],
     "mbh": [1e6, 2e6],
+    "id_galaxy": [42, 99],
 }
 
 
@@ -77,6 +78,7 @@ def test_most_massive_galaxy_treated_as_central():
     assert props["GasMass_Hot"] == pytest.approx(4e9)
     assert props["StarFormationRate"] == pytest.approx(1.2)
     assert props["BlackHoleMass"] == pytest.approx(2e6)
+    assert props["SharkGalaxyID"] == 99  # id_galaxy of the central (index 1)
 
 
 def test_metallicities_computed_as_metal_mass_ratio():
@@ -127,3 +129,16 @@ def test_default_match_by_and_r_scale():
     SharkGalaxyBackend().galaxy_properties(epoch, halo_row=0)
 
     assert epoch.calls == [{"index": 0, "match_by": "position", "r_scale": 1.0}]
+
+
+def test_shark_galaxy_id_omitted_when_absent():
+    epoch = _FakeEpoch(_FakeMatched({"mass": [3e9]}))  # no id_galaxy
+    props = SharkGalaxyBackend().galaxy_properties(epoch, halo_row=0)
+    assert "SharkGalaxyID" not in props
+
+
+def test_native_comoving_little_h_is_always_true_true():
+    assert SharkGalaxyBackend().native_comoving_little_h() == (True, True)
+    # epoch argument is accepted but ignored -- SHARK's convention is fixed
+    assert SharkGalaxyBackend().native_comoving_little_h(epoch=object()) == \
+        (True, True)

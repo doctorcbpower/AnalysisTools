@@ -54,6 +54,16 @@ class GalaxyBackend(Protocol):
         feeds ``MeanStellarAge``/``QuenchingTime``/``IsQuenched_z0``."""
         ...
 
+    def native_comoving_little_h(self, epoch=None):
+        """Optional: (comoving, little_h) of the values
+        ``galaxy_properties()`` returns, or ``(None, None)``/absent if
+        unknown. Not part of the required protocol (checked with
+        ``hasattr`` by ``pipeline.CrossMatchStage``) since a backend with
+        no fixed or epoch-derived native state has nothing meaningful to
+        report here. Used by ``validation.SchemaValidator``'s little-h/
+        comoving cross-check against schema.py's declared units."""
+        ...
+
 
 def rebin_sfh(native_edges: np.ndarray, native_sfr: np.ndarray,
               output_edges: np.ndarray) -> np.ndarray:
@@ -125,6 +135,8 @@ class SharkGalaxyBackend:
       from the native ``*_metals_disk``/``*_metals_bulge`` fields -- a
       genuinely unit- and h-independent ratio, unlike everything else
       here (see units caveat below).
+    - ``SharkGalaxyID``: native ``id_galaxy``, the foreign key into the
+      SHARK output the schema field is documented as.
 
     Units caveat (same as ``pipeline.HaloExtractStage``/
     ``derived.EnvironmentStage``): values are returned exactly as
@@ -208,8 +220,21 @@ class SharkGalaxyBackend:
         mbh = scalar("mbh")
         if mbh is not None:
             props["BlackHoleMass"] = mbh
+        galaxy_id = scalar("id_galaxy")
+        if galaxy_id is not None:
+            props["SharkGalaxyID"] = int(galaxy_id)
 
         return props
+
+    def native_comoving_little_h(self, epoch=None):
+        """(comoving, little_h) of the values ``galaxy_properties()``
+        returns -- always ``(True, True)`` for SHARK: its output is always
+        comoving Mpc/h positions and Msun/h masses regardless of ``epoch``
+        (unlike ``HydroGalaxyBackend``, whose native state follows the
+        snapshot it reads). Used by ``pipeline.CrossMatchStage`` to record
+        the native unit state for ``validation.SchemaValidator``'s
+        little-h/comoving cross-check -- see the units caveat above."""
+        return True, True
 
     def star_formation_history(self, epoch, halo_row: int, time_bin_edges):
         """SHARK's native disk+bulge SFH (``SharkModel.sfh_disk``/
@@ -405,6 +430,19 @@ class HydroGalaxyBackend:
         props["HalfMassRadiusStellar"] = float(distance[order][idx])
 
         return props
+
+    def native_comoving_little_h(self, epoch=None):
+        """(comoving, little_h) of the values ``galaxy_properties()``
+        returns -- follows the ``Epoch``'s snapshot config (star particles
+        inherit whatever comoving/little_h state the ``SnapshotDataset``
+        was constructed with), unlike ``SharkGalaxyBackend``'s fixed
+        native convention. ``(None, None)`` if ``epoch``/``epoch.snapshot``
+        isn't available. Used by ``pipeline.CrossMatchStage`` -- see
+        ``SharkGalaxyBackend.native_comoving_little_h``."""
+        snapshot = getattr(epoch, "snapshot", None) if epoch is not None else None
+        if snapshot is None:
+            return None, None
+        return snapshot.meta.get("comoving"), snapshot.meta.get("little_h")
 
     def star_formation_history(self, epoch, halo_row: int, time_bin_edges):
         """Histogram of formation mass (``initmass`` if available, else

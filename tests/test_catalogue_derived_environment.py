@@ -149,6 +149,38 @@ def test_multiple_satellites_independent_results():
     assert nearest[1] == pytest.approx(9.0)   # satellite at [10,0,0] -> row3
 
 
+def test_host_flags_copied_through_when_present():
+    halos = _five_halo_catalogue()
+    epoch = _FakeEpoch(halos)
+    context = _context(halo_row=[1, 2], pos_z0=[[0, 0, 0], [1, 0, 0]])
+    context.columns["Haloes/IsIsolated"] = np.array([True])
+    context.columns["Haloes/IsPaired"] = np.array([False])
+
+    stage = EnvironmentStage(epoch, host_row=0, mass_threshold=1e10,
+                             aperture_radius=2.0)
+    result = stage.run(context)
+
+    np.testing.assert_array_equal(
+        result.columns["Satellites/Environment/HostIsIsolated"],
+        [True, True])
+    np.testing.assert_array_equal(
+        result.columns["Satellites/Environment/HostIsPaired"],
+        [False, False])
+
+
+def test_host_flags_omitted_when_host_environment_stage_did_not_run():
+    halos = _five_halo_catalogue()
+    epoch = _FakeEpoch(halos)
+    context = _context(halo_row=[1], pos_z0=[[0, 0, 0]])
+
+    stage = EnvironmentStage(epoch, host_row=0, mass_threshold=1e10,
+                             aperture_radius=2.0)
+    result = stage.run(context)
+
+    assert "Satellites/Environment/HostIsIsolated" not in result.columns
+    assert "Satellites/Environment/HostIsPaired" not in result.columns
+
+
 def test_raises_when_no_halo_catalogue():
     epoch = _FakeEpoch(None)
     stage = EnvironmentStage(epoch, host_row=0, mass_threshold=1e10,

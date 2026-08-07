@@ -196,6 +196,15 @@ class HaloExtractStage(ExtractStage):
                 "catalogue; Satellites/HaloProperties/Vmax_z0 omitted.",
                 self.name, self.VMAX_CANDIDATES, halos.fileformat)
 
+        # native comoving/little_h state of every Haloes/* and *_z0 field
+        # above -- read by validation.SchemaValidator's little-h/comoving
+        # cross-check against schema.py's declared units (see this stage's
+        # units caveat).
+        context.meta.setdefault("comoving_little_h", {})["Haloes"] = {
+            "comoving": halos.meta.get("comoving"),
+            "little_h": halos.meta.get("little_h"),
+        }
+
         context.record_stage(self.name, host_row=host,
                              n_satellites=int(sats.size))
         return context
@@ -360,6 +369,13 @@ class CrossMatchStage(PipelineStage):
                     context.columns[
                         f"Satellites/GalaxyProperties/{field}"] = values
                 n_galaxy_matched = sum(1 for p in per_satellite if p)
+
+                if hasattr(self.galaxy_backend, "native_comoving_little_h"):
+                    comoving, little_h = \
+                        self.galaxy_backend.native_comoving_little_h(self.epoch)
+                    context.meta.setdefault("comoving_little_h", {})[
+                        "Satellites/GalaxyProperties"] = {
+                            "comoving": comoving, "little_h": little_h}
 
         context.record_stage(self.name, n_satellites=n, host_id=host_id,
                              n_galaxy_matched=n_galaxy_matched)
