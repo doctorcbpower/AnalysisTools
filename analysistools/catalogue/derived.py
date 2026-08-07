@@ -374,6 +374,11 @@ class StarFormationHistoryStage(PipelineStage):
             quenching_time
         context.columns["Satellites/GalaxyProperties/IsQuenched_z0"] = \
             is_quenched
+        # so downstream stages that also need to interpret the SFH array
+        # (e.g. DorchaSpecificStage's FossilFraction) use the exact same
+        # bins, rather than risk a second, independently-specified and
+        # possibly mismatched time_bin_edges argument.
+        context.meta["time_bin_edges_sfh"] = self.time_bin_edges
 
         context.record_stage(self.name, n_satellites=n, n_no_sfh=n_no_sfh)
         return context
@@ -552,18 +557,132 @@ class ObservabilityStage(PipelineStage):
 
 
 class DorchaSpecificStage(PipelineStage):
-    """ProgenitorParticleFraction, EarliestProgenitorRedshift,
-    PeakOverdensity, FormationEnvironmentClass, FossilFraction -- requires
-    particle tagging + progenitor-field analysis inputs; not applicable to
-    projects without particle tagging (omit from ``derived_stages``)."""
+    """``EarliestProgenitorRedshift`` and ``FossilFraction`` -- the only
+    two ``Satellites/DorchaProperties/*`` fields computable without
+    infrastructure this codebase doesn't have at all (particle tagging,
+    a progenitor density-field analysis, a cosmic-web classifier) or a
+    common-grid machinery this stage doesn't build (see the deferred list
+    below).
+
+    ``EarliestProgenitorRedshift`` needs no new parameter: the tree walk
+    (``TreeExtractStage``) already stops at the highest redshift a
+    progenitor could be resolved to, so each satellite's
+    ``MergerTrees/main_branch`` track's *first* entry (earliest time) is
+    already the answer.
+
+    ``FossilFraction`` ("fraction of stellar mass formed before
+    reionisation") needs ``Satellites/GalaxyProperties/SFH`` (run
+    ``StarFormationHistoryStage`` first -- this stage reads its
+    ``context.meta["time_bin_edges_sfh"]`` rather than taking a second,
+    independently-specified grid that could mismatch it) plus a
+    reionisation epoch. ``reionisation_lookback_time`` (Gyr) is a
+    required constructor argument, not an assumed redshift (commonly
+    z~6-10 depending on definition/model) -- picking one silently would
+    be exactly the kind of unstated modelling assumption this pipeline
+    has avoided everywhere else (``EnvironmentStage``'s
+    ``mass_threshold``, ``StarFormationHistoryStage``'s
+    ``quenched_ssfr_threshold``, ...).
+
+    Deliberately **not** computed here, documented rather than guessed:
+
+    - ``ProgenitorParticleFraction``: needs particle tagging
+      (cross-snapshot particle-ID tracking to identify which progenitor
+      halo each z=0 bound particle came from) -- genuinely new
+      infrastructure, nothing in this codebase does this.
+    - ``PeakOverdensity``: needs a progenitor density-field analysis (a
+      density field evaluated along each progenitor's trajectory) --
+      also new infrastructure.
+    - ``FormationEnvironmentClass``: needs an actual cosmic-web
+      classifier (T-web/V-web or similar) -- the same gap as
+      ``EnvironmentStage``'s ``CosmicWebClass``.
+    - ``NumberOfMergers``: needs the full progenitor list at each
+      snapshot (which *other* branches merged into the main branch), not
+      just the main-branch walk this pipeline currently does --
+      ``treeio_subfind.py``/``treeio_treefrog.py`` don't parse a
+      NextProgenitor-equivalent field at all, so this is a genuine
+      missing-infrastructure gap in the *reader* layer, not just an
+      unstated modelling choice at this stage.
+    - ``MassAccretionRateDM``: schema declares this on a fixed
+      ``[N, N_snap]`` ``Snapshots/``-indexed grid shared by every
+      satellite, but nothing establishes that common grid anywhere in
+      this pipeline (satellites resolve back to different earliest
+      snapshots); doing this properly needs the same kind of common-grid
+      machinery ``StarFormationHistoryStage`` built for SFH, applied to
+      mass instead of SFR -- a reasonable follow-up, not implemented
+      here.
+    """
 
     name = "dorcha_specific"
-    inputs = ("Satellites/ParticleTags/particle_ids",)
-    outputs = ("Satellites/DorchaProperties/ProgenitorParticleFraction",
+    inputs = ("MergerTrees/main_branch",)
+    outputs = ("Satellites/DorchaProperties/EarliestProgenitorRedshift",
                "Satellites/DorchaProperties/FossilFraction")
 
+    def __init__(self, reionisation_lookback_time: float):
+        self.reionisation_lookback_time = float(reionisation_lookback_time)
+
     def run(self, context):
-        raise NotImplementedError("Phase 6b.")
+        main_branch = context.columns["MergerTrees/main_branch"]
+        n = len(main_branch)
+
+        earliest_z = np.full(n, np.nan)
+        n_no_track = 0
+        for i, track_ds in enumerate(main_branch):
+            if track_ds is None or len(track_ds.track) == 0:
+                n_no_track += 1
+                continue
+            earliest_z[i] = float(track_ds.track.Redshift[0])
+
+        if n_no_track:
+            logger.warning(
+                "%s: %d/%d satellites have no resolved tree entry; "
+                "EarliestProgenitorRedshift left NaN for them.",
+                self.name, n_no_track, n)
+
+        fossil_fraction = np.full(n, np.nan)
+        sfh = context.columns.get("Satellites/GalaxyProperties/SFH")
+        time_bin_edges = context.meta.get("time_bin_edges_sfh")
+
+        if sfh is None:
+            pass  # StarFormationHistoryStage hasn't run -- leave NaN
+        elif time_bin_edges is None:
+            logger.warning(
+                "%s: Satellites/GalaxyProperties/SFH is present but "
+                "context.meta['time_bin_edges_sfh'] isn't (run "
+                "StarFormationHistoryStage, which sets it, first) -- "
+                "FossilFraction left NaN for every satellite.", self.name)
+        else:
+            bin_widths_yr = np.diff(time_bin_edges) * 1.0e9
+            # fraction of each bin's width at lookback >= reionisation
+            # time (i.e. formed *before* reionisation), by fractional
+            # overlap so a bin straddling the boundary isn't just snapped
+            # to its nearest edge -- same technique as backends.rebin_sfh.
+            overlap_lo = np.maximum(time_bin_edges[:-1],
+                                    self.reionisation_lookback_time)
+            overlap_hi = time_bin_edges[1:]
+            bin_widths = np.diff(time_bin_edges)
+            pre_reion_overlap = np.clip(overlap_hi - overlap_lo, 0.0, None)
+            pre_reion_frac = np.divide(
+                pre_reion_overlap, bin_widths,
+                out=np.zeros_like(bin_widths), where=bin_widths > 0)
+
+            for i in range(n):
+                if np.any(np.isnan(sfh[i])):
+                    continue
+                formed_mass = sfh[i] * bin_widths_yr
+                total_mass = float(np.sum(formed_mass))
+                if total_mass > 0:
+                    pre_reion_mass = float(np.sum(formed_mass * pre_reion_frac))
+                    fossil_fraction[i] = pre_reion_mass / total_mass
+
+        context.columns[
+            "Satellites/DorchaProperties/EarliestProgenitorRedshift"] = \
+            earliest_z
+        context.columns["Satellites/DorchaProperties/FossilFraction"] = \
+            fossil_fraction
+
+        context.record_stage(self.name, n_satellites=n,
+                             n_no_track=n_no_track)
+        return context
 
 
 # Registry used by CatalogueBuilder to resolve a config's `derived_stages`

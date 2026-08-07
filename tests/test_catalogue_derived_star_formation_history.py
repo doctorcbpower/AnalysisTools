@@ -78,6 +78,20 @@ def test_sfh_stacked_with_correct_shape_and_values():
         np.testing.assert_allclose(edges, TIME_BIN_EDGES)
 
 
+def test_time_bin_edges_recorded_in_context_meta():
+    # DorchaSpecificStage's FossilFraction reads this rather than taking
+    # its own, independently-specified (and possibly mismatched) grid.
+    backend = _FakeSFHBackend({0: [1.0, 2.0, 3.0]})
+    context = _context([0])
+    stage = StarFormationHistoryStage(epoch=object(), galaxy_backend=backend,
+                                      time_bin_edges=TIME_BIN_EDGES,
+                                      quenched_ssfr_threshold=1e-11)
+    result = stage.run(context)
+
+    np.testing.assert_array_equal(result.meta["time_bin_edges_sfh"],
+                                  TIME_BIN_EDGES)
+
+
 def test_mean_stellar_age_is_mass_weighted_over_bins():
     # all formed mass in the middle bin -> mean age = that bin's centre
     backend = _FakeSFHBackend({0: [0.0, 5.0, 0.0]})
