@@ -41,6 +41,64 @@ class GalaxyBackend(Protocol):
         "not applicable" from "failed to compute"."""
         ...
 
+    def star_formation_history(
+            self, epoch: "analysistools.api.simulation.Epoch",
+            halo_row: int, time_bin_edges: np.ndarray) -> Optional[np.ndarray]:
+        """Star formation history for the halo at ``halo_row``, rebinned
+        onto ``time_bin_edges`` (ascending lookback time in Gyr, length
+        n_bins+1, e.g. ``Snapshots/time_bin_edges_sfh``), as an (n_bins,)
+        Msun/yr array -- or ``None`` if not computable (no match, or no
+        native SFH source available for this backend/catalogue). Used by
+        ``derived.StarFormationHistoryStage``, which is also where the
+        rebinned result becomes ``Satellites/GalaxyProperties/SFH`` and
+        feeds ``MeanStellarAge``/``QuenchingTime``/``IsQuenched_z0``."""
+        ...
+
+
+def rebin_sfh(native_edges: np.ndarray, native_sfr: np.ndarray,
+              output_edges: np.ndarray) -> np.ndarray:
+    """Rebin a piecewise-constant SFR history (constant within each native
+    bin) onto ``output_edges``, conserving total mass formed via
+    fractional bin-overlap -- a mechanical numerical operation, not a
+    modelling choice, so shared by every backend rather than each
+    reimplementing it.
+
+    Parameters
+    ----------
+    native_edges : ndarray (n_native+1,)
+        Ascending bin edges of the source history (same units as
+        `output_edges`, e.g. Gyr lookback time).
+    native_sfr : ndarray (n_native,)
+        SFR in each native bin (Msun/yr).
+    output_edges : ndarray (n_output+1,)
+        Ascending bin edges to rebin onto.
+
+    Returns
+    -------
+    ndarray (n_output,)
+        SFR in each output bin (Msun/yr).
+    """
+    native_edges = np.asarray(native_edges, dtype=float)
+    native_sfr = np.asarray(native_sfr, dtype=float)
+    output_edges = np.asarray(output_edges, dtype=float)
+
+    native_widths = np.diff(native_edges)
+    native_mass = native_sfr * native_widths  # Msun formed per native bin
+
+    n_output = len(output_edges) - 1
+    output_mass = np.zeros(n_output)
+    for i in range(n_output):
+        lo, hi = output_edges[i], output_edges[i + 1]
+        overlap_lo = np.maximum(native_edges[:-1], lo)
+        overlap_hi = np.minimum(native_edges[1:], hi)
+        overlap = np.clip(overlap_hi - overlap_lo, 0.0, None)
+        frac = np.divide(overlap, native_widths,
+                         out=np.zeros_like(overlap), where=native_widths > 0)
+        output_mass[i] = np.sum(frac * native_mass)
+
+    output_widths = np.diff(output_edges)
+    return output_mass / output_widths
+
 
 class SharkGalaxyBackend:
     """Galaxy properties from a SHARK semi-analytic catalogue, matched to
@@ -92,14 +150,21 @@ class SharkGalaxyBackend:
         self.match_by = match_by
         self.r_scale = r_scale
 
-    def galaxy_properties(self, epoch, halo_row: int) -> Dict[str, Any]:
+    def _match_central(self, epoch, halo_row: int):
+        """Shared by galaxy_properties() and star_formation_history(): the
+        matched view and the row within it treated as "the" (central)
+        galaxy, or (None, None) if nothing matches."""
         matched = epoch.galaxies_in_halo(
             index=halo_row, match_by=self.match_by, r_scale=self.r_scale)
         if len(matched) == 0 or "mass" not in matched:
-            return {}
-
+            return None, None
         mass = np.asarray(matched["mass"])
-        central = int(np.argmax(mass))
+        return matched, int(np.argmax(mass))
+
+    def galaxy_properties(self, epoch, halo_row: int) -> Dict[str, Any]:
+        matched, central = self._match_central(epoch, halo_row)
+        if matched is None:
+            return {}
 
         def scalar(field: str, default: Optional[float] = None):
             arr = matched.get(field)
@@ -145,6 +210,56 @@ class SharkGalaxyBackend:
             props["BlackHoleMass"] = mbh
 
         return props
+
+    def star_formation_history(self, epoch, halo_row: int, time_bin_edges):
+        """SHARK's native disk+bulge SFH (``SharkModel.sfh_disk``/
+        ``sfh_bulge``), rebinned from its own native lookback-time grid
+        (``SharkModel.get_sfh_meta``'s ``delta_t``/``lbt_mean``) onto
+        ``time_bin_edges`` via ``rebin_sfh``.
+
+        Only available for a *model-backed* ``GalaxyCatalogue``
+        (``epoch.galaxies`` built via ``GalaxyCatalogue.from_model``,
+        i.e. ``.model`` is not ``None``) -- a file-backed one only reads
+        ``galaxies.hdf5``, not the separate ``star_formation_histories
+        .hdf5`` this needs. Returns ``None`` if unavailable for any
+        reason (no match, file-backed catalogue, no native SFH).
+        """
+        matched, central = self._match_central(epoch, halo_row)
+        if matched is None:
+            return None
+
+        model = getattr(matched, "model", None)
+        if model is None:
+            return None
+
+        redshift = getattr(epoch, "redshift", None)
+        if redshift is None:
+            return None
+
+        row = int(matched.index[central])
+        try:
+            sfh_disk = np.asarray(model.sfh_disk(redshift))[row]
+            sfh_bulge = np.asarray(model.sfh_bulge(redshift))[row]
+            sfh_meta = model.get_sfh_meta(redshift)
+        except (KeyError, IndexError, AttributeError):
+            return None
+
+        native_sfr = sfh_disk + sfh_bulge
+        lbt_mean = np.asarray(sfh_meta["lbt_mean"], dtype=float)      # Gyr
+        delta_t = np.asarray(sfh_meta["delta_t"], dtype=float) / 1.0e3  # Myr -> Gyr
+
+        # Sort by ascending lookback time -- SHARK's own storage order
+        # isn't verified against real data anywhere in this codebase, so
+        # don't assume it; reconstructing edges from (possibly unsorted)
+        # centres+widths requires ascending order first.
+        order = np.argsort(lbt_mean)
+        lbt_mean, delta_t, native_sfr = \
+            lbt_mean[order], delta_t[order], native_sfr[order]
+        native_edges = np.empty(len(lbt_mean) + 1)
+        native_edges[:-1] = lbt_mean - delta_t / 2.0
+        native_edges[-1] = lbt_mean[-1] + delta_t[-1] / 2.0
+
+        return rebin_sfh(native_edges, native_sfr, time_bin_edges)
 
 
 def _cosmic_time_gyr(a, h0: float, omega_m: float, omega_lambda: float):
@@ -221,6 +336,31 @@ class HydroGalaxyBackend:
         self.r_scale = r_scale
         self.young_star_age_threshold = young_star_age_threshold
 
+    @staticmethod
+    def _star_ages_gyr(stars):
+        """(age_gyr, formation_mass) per star particle, or (None, None) if
+        either the ``age``/``initmass``-or-``mass`` inputs or the cosmology
+        needed to convert formation scale factor -> Gyr aren't available.
+        Shared by galaxy_properties() and star_formation_history() so both
+        use the exact same age definition."""
+        if "age" not in stars:
+            return None, None
+        h0 = stars.meta.get("h0")
+        omega_m = stars.meta.get("omega_0")
+        omega_lambda = stars.meta.get("omega_lambda")
+        a_now = stars.meta.get("scale_factor")
+        if None in (h0, omega_m, omega_lambda, a_now):
+            return None, None
+
+        a_form = np.asarray(stars["age"])
+        t_form = _cosmic_time_gyr(a_form, h0, omega_m, omega_lambda)
+        t_now = _cosmic_time_gyr(a_now, h0, omega_m, omega_lambda)
+        age_gyr = t_now - t_form
+
+        formation_mass = (np.asarray(stars["initmass"]) if "initmass" in stars
+                          else np.asarray(stars["mass"]))
+        return age_gyr, formation_mass
+
     def galaxy_properties(self, epoch, halo_row: int) -> Dict[str, Any]:
         from ..merger_tree_types import periodic_delta
 
@@ -242,21 +382,10 @@ class HydroGalaxyBackend:
             props["MetallicityStellar"] = float(
                 np.average(metallicity, weights=mass))
 
-        h0 = stars.meta.get("h0")
-        omega_m = stars.meta.get("omega_0")
-        omega_lambda = stars.meta.get("omega_lambda")
-        a_now = stars.meta.get("scale_factor")
-        have_cosmology = None not in (h0, omega_m, omega_lambda, a_now)
-
-        if "age" in stars and have_cosmology:
-            a_form = np.asarray(stars["age"])
-            t_form = _cosmic_time_gyr(a_form, h0, omega_m, omega_lambda)
-            t_now = _cosmic_time_gyr(a_now, h0, omega_m, omega_lambda)
-            age_gyr = t_now - t_form
+        age_gyr, formation_mass = self._star_ages_gyr(stars)
+        if age_gyr is not None:
             props["MeanStellarAge"] = float(np.average(age_gyr, weights=mass))
 
-            formation_mass = (np.asarray(stars["initmass"])
-                              if "initmass" in stars else mass)
             young = age_gyr < self.young_star_age_threshold
             if np.any(young):
                 window_yr = self.young_star_age_threshold * 1.0e9
@@ -276,6 +405,32 @@ class HydroGalaxyBackend:
         props["HalfMassRadiusStellar"] = float(distance[order][idx])
 
         return props
+
+    def star_formation_history(self, epoch, halo_row: int, time_bin_edges):
+        """Histogram of formation mass (``initmass`` if available, else
+        current ``mass``) over each particle's age (Gyr lookback,
+        ``_star_ages_gyr`` -- the same age definition
+        ``galaxy_properties()`` uses for ``MeanStellarAge``), binned
+        directly onto ``time_bin_edges`` (no rebinning needed: unlike
+        SHARK's pre-tabulated history, particle ages can be binned onto
+        any grid directly). Returns ``None`` if no star particles are
+        found, or age/cosmology aren't resolvable (see
+        ``_star_ages_gyr``).
+        """
+        stars = epoch.particles_in_halo(index=halo_row, r_scale=self.r_scale,
+                                        species="star")
+        if len(stars) == 0:
+            return None
+
+        age_gyr, formation_mass = self._star_ages_gyr(stars)
+        if age_gyr is None:
+            return None
+
+        edges = np.asarray(time_bin_edges, dtype=float)
+        mass_per_bin, _ = np.histogram(age_gyr, bins=edges,
+                                       weights=formation_mass)
+        widths_gyr = np.diff(edges)
+        return mass_per_bin / (widths_gyr * 1.0e9)
 
 
 BACKENDS = {

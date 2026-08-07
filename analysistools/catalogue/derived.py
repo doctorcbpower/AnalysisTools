@@ -262,17 +262,121 @@ class OrbitalPropertiesStage(PipelineStage):
 
 
 class StarFormationHistoryStage(PipelineStage):
-    """Rebins the galaxy backend's native SFH onto the common
-    ``Snapshots/time_bin_edges_sfh`` grid; derives MeanStellarAge,
-    QuenchingTime, IsQuenched_z0."""
+    """``SFH``, ``MeanStellarAge``, ``QuenchingTime``, ``IsQuenched_z0`` --
+    via the configured ``GalaxyBackend``'s ``star_formation_history()``,
+    rebinned onto a common ``time_bin_edges`` grid (required constructor
+    argument, matching schema.py's ``Snapshots/time_bin_edges_sfh`` -- no
+    default is picked here, same reasoning as ``EnvironmentStage``'s
+    ``mass_threshold``/``aperture_radius``). ``time_bin_edges`` must be
+    ascending *lookback* time in Gyr, index 0 = now -- both backends'
+    ``star_formation_history()`` and the quenching-time walk below assume
+    that ordering.
+
+    ``MeanStellarAge`` here **supersedes** whatever
+    ``galaxy_backend.galaxy_properties()`` already put in context (both
+    ``SharkGalaxyBackend`` and ``HydroGalaxyBackend`` compute a quick one
+    too, from their own native per-galaxy/per-particle data) with a
+    version computed from the same common time grid for every satellite
+    regardless of backend -- which is the point: a SHARK and a hydro
+    catalogue are only directly comparable if ``MeanStellarAge`` means the
+    same thing in both. ``StarFormationRate`` (schema: primary, straight
+    from the backend) is *not* touched here.
+
+    ``QuenchingTime``/``IsQuenched_z0`` deliberately deviate from the
+    schema's literal "sSFR below threshold x sSFR_MS" definition: that
+    needs an assumed star-forming-main-sequence parametrisation (e.g.
+    Speagle et al. 2014) this pipeline doesn't specify anywhere.
+    ``quenched_ssfr_threshold`` is instead a required, **absolute** sSFR
+    cut (1/yr -- e.g. the classic ~1e-11/yr), not main-sequence-relative.
+    Extend this stage if the MS-relative definition is actually needed
+    once a specific SFMS model is chosen.
+
+    Satellites with no computable SFH (backend's
+    ``star_formation_history()`` returns ``None``) get an all-NaN ``SFH``
+    row and NaN/``False`` for the derived fields, not a stage failure.
+    """
 
     name = "star_formation_history"
-    inputs = ("Satellites/GalaxyProperties/StellarMass",)
+    inputs = ("Satellites/_internal/halo_row",
+             "Satellites/GalaxyProperties/StellarMass")
     outputs = ("Satellites/GalaxyProperties/SFH",
-               "Satellites/GalaxyProperties/QuenchingTime")
+               "Satellites/GalaxyProperties/MeanStellarAge",
+               "Satellites/GalaxyProperties/QuenchingTime",
+               "Satellites/GalaxyProperties/IsQuenched_z0")
+
+    def __init__(self, epoch, galaxy_backend, time_bin_edges,
+                 quenched_ssfr_threshold: float):
+        self.epoch = epoch
+        self.galaxy_backend = galaxy_backend
+        self.time_bin_edges = np.asarray(time_bin_edges, dtype=float)
+        self.quenched_ssfr_threshold = float(quenched_ssfr_threshold)
 
     def run(self, context):
-        raise NotImplementedError("Phase 6b.")
+        halo_rows = context.columns["Satellites/_internal/halo_row"]
+        n = len(halo_rows)
+        n_bins = len(self.time_bin_edges) - 1
+        bin_centres = 0.5 * (self.time_bin_edges[:-1]
+                             + self.time_bin_edges[1:])
+        bin_widths_yr = np.diff(self.time_bin_edges) * 1.0e9
+
+        stellar_mass = context.columns.get(
+            "Satellites/GalaxyProperties/StellarMass")
+        sfr_z0 = context.columns.get(
+            "Satellites/GalaxyProperties/StarFormationRate")
+
+        sfh = np.full((n, n_bins), np.nan)
+        mean_age = np.full(n, np.nan)
+        quenching_time = np.full(n, np.nan)
+        is_quenched = np.zeros(n, dtype=bool)
+
+        n_no_sfh = 0
+        for i, row in enumerate(halo_rows):
+            row_sfh = self.galaxy_backend.star_formation_history(
+                self.epoch, int(row), self.time_bin_edges)
+            if row_sfh is None:
+                n_no_sfh += 1
+                continue
+            sfh[i] = row_sfh
+
+            formed_mass = row_sfh * bin_widths_yr
+            total_formed = float(np.sum(formed_mass))
+            if total_formed > 0:
+                mean_age[i] = float(
+                    np.average(bin_centres, weights=formed_mass))
+
+            mstar_i = (stellar_mass[i] if stellar_mass is not None
+                      and not np.isnan(stellar_mass[i]) else None)
+            sfr_i = (sfr_z0[i] if sfr_z0 is not None
+                    and not np.isnan(sfr_z0[i]) else None)
+            if mstar_i is not None and mstar_i > 0 and sfr_i is not None:
+                is_quenched[i] = (sfr_i / mstar_i) < self.quenched_ssfr_threshold
+                if is_quenched[i]:
+                    ssfr_history = row_sfh / mstar_i
+                    active = ssfr_history >= self.quenched_ssfr_threshold
+                    if np.any(active):
+                        # first (smallest-lookback, i.e. most recent)
+                        # active bin -- the last time star formation was
+                        # above threshold before falling permanently below
+                        quenching_time[i] = bin_centres[int(np.argmax(active))]
+
+        if n_no_sfh:
+            logger.warning(
+                "%s: %d/%d satellites have no computable star formation "
+                "history (galaxy_backend.star_formation_history() "
+                "returned None); SFH/MeanStellarAge/QuenchingTime/"
+                "IsQuenched_z0 left at their NaN/False sentinels.",
+                self.name, n_no_sfh, n)
+
+        context.columns["Satellites/GalaxyProperties/SFH"] = sfh
+        context.columns["Satellites/GalaxyProperties/MeanStellarAge"] = \
+            mean_age
+        context.columns["Satellites/GalaxyProperties/QuenchingTime"] = \
+            quenching_time
+        context.columns["Satellites/GalaxyProperties/IsQuenched_z0"] = \
+            is_quenched
+
+        context.record_stage(self.name, n_satellites=n, n_no_sfh=n_no_sfh)
+        return context
 
 
 class EnvironmentStage(PipelineStage):

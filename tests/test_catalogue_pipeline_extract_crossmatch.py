@@ -271,3 +271,92 @@ def test_cross_match_warns_but_does_not_crash_with_galaxy_backend(
         CrossMatchStage(galaxy_backend=object()).run(context)
 
     assert any("galaxy_backend" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# CrossMatchStage: galaxy_backend.galaxy_properties() wiring
+# ---------------------------------------------------------------------------
+
+class _FakeGalaxyBackend:
+    def __init__(self, props_by_row):
+        self.props_by_row = props_by_row
+        self.calls = []
+
+    def galaxy_properties(self, epoch, halo_row):
+        self.calls.append(halo_row)
+        return self.props_by_row.get(halo_row, {})
+
+
+@needs_data
+def test_galaxy_properties_populate_columns_in_final_row_order(
+        epoch, host_and_satellite_rows):
+    host_row, satellite_rows = host_and_satellite_rows
+    props_by_row = {row: {"StellarMass": float(1000 + row)}
+                    for row in satellite_rows}
+    backend = _FakeGalaxyBackend(props_by_row)
+
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+    result = CrossMatchStage(galaxy_backend=backend, epoch=epoch).run(context)
+
+    halo_rows = result.columns["Satellites/_internal/halo_row"]
+    stellar_mass = result.columns["Satellites/GalaxyProperties/StellarMass"]
+    for row, mass in zip(halo_rows, stellar_mass):
+        assert mass == pytest.approx(props_by_row[int(row)]["StellarMass"])
+
+    # called once per satellite, with the (post-sort) halo rows
+    assert sorted(backend.calls) == sorted(int(r) for r in halo_rows)
+
+
+@needs_data
+def test_galaxy_properties_missing_fields_become_nan(
+        epoch, host_and_satellite_rows):
+    host_row, satellite_rows = host_and_satellite_rows
+    # only the first satellite has GasMass_Cold
+    props_by_row = {row: {"StellarMass": 1e9} for row in satellite_rows}
+    props_by_row[satellite_rows[0]]["GasMass_Cold"] = 5e7
+    backend = _FakeGalaxyBackend(props_by_row)
+
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+    result = CrossMatchStage(galaxy_backend=backend, epoch=epoch).run(context)
+
+    halo_rows = result.columns["Satellites/_internal/halo_row"]
+    gas_mass = result.columns["Satellites/GalaxyProperties/GasMass_Cold"]
+    n_with_gas = sum(1 for row in halo_rows if int(row) == satellite_rows[0])
+    assert n_with_gas == 1
+    assert np.sum(~np.isnan(gas_mass)) == 1
+    assert np.sum(np.isnan(gas_mass)) == len(satellite_rows) - 1
+
+
+@needs_data
+def test_galaxy_backend_without_epoch_warns_and_skips(
+        epoch, host_and_satellite_rows, caplog):
+    host_row, satellite_rows = host_and_satellite_rows
+    backend = _FakeGalaxyBackend({})
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+
+    with caplog.at_level("WARNING"):
+        result = CrossMatchStage(galaxy_backend=backend).run(context)  # no epoch=
+
+    assert backend.calls == []
+    assert not any(k.startswith("Satellites/GalaxyProperties/")
+                   for k in result.columns)
+
+
+def test_galaxy_backend_without_halo_extract_first_warns_and_skips(caplog):
+    backend = _FakeGalaxyBackend({})
+    context = PipelineContext()
+    context.columns["Satellites/Identification/SubhaloID_z0"] = \
+        np.array([2, 1])
+    context.columns["Haloes/HostHaloID"] = np.array([99])
+
+    with caplog.at_level("WARNING"):
+        result = CrossMatchStage(
+            galaxy_backend=backend, epoch=object()).run(context)
+
+    assert backend.calls == []
+    assert any("halo_row" in r.message for r in caplog.records)
+    assert not any(k.startswith("Satellites/GalaxyProperties/")
+                   for k in result.columns)

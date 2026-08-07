@@ -350,6 +350,25 @@ class Dataset:
         """
         return self._index is not None
 
+    @property
+    def index(self) -> np.ndarray:
+        """
+        Row indices into the unfiltered table this view was selected from
+        (composed through nested selects, matching `_make_view`).
+
+        `arange(len(self))` if this is the full table, not a view -- so
+        `parent_columns[ds.index]` recovers the rows a view represents
+        regardless of whether `ds` is actually a view, without a branch.
+
+        Returns
+        -------
+        ndarray
+        """
+        self._ensure_loaded()
+        if self._index is not None:
+            return self._index
+        return np.arange(len(self))
+
     # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------

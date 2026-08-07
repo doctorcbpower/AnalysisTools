@@ -194,3 +194,67 @@ def test_forwards_r_scale_and_species_to_epoch():
     HydroGalaxyBackend(r_scale=2.5).galaxy_properties(epoch, halo_row=3)
 
     assert epoch.calls == [{"index": 3, "r_scale": 2.5, "species": "star"}]
+
+
+# ---------------------------------------------------------------------------
+# star_formation_history
+# ---------------------------------------------------------------------------
+
+def test_sfh_returns_none_without_stars():
+    epoch = _FakeEpoch(_FakeStars({}), halo_pos=[[0, 0, 0]])
+    result = HydroGalaxyBackend().star_formation_history(
+        epoch, halo_row=0, time_bin_edges=[0.0, 1.0])
+    assert result is None
+
+
+def test_sfh_returns_none_without_age_field():
+    stars = _FakeStars({"pos": [[0, 0, 0]], "mass": [1e5]})  # no "age"
+    epoch = _FakeEpoch(stars, halo_pos=[[0, 0, 0]])
+    result = HydroGalaxyBackend().star_formation_history(
+        epoch, halo_row=0, time_bin_edges=[0.0, 1.0])
+    assert result is None
+
+
+def test_sfh_returns_none_without_cosmology():
+    stars = _FakeStars({"pos": [[0, 0, 0]], "mass": [1e5], "age": [0.9]},
+                       meta={"h0": None, "omega_0": 0.3,
+                            "omega_lambda": 0.7, "scale_factor": 1.0})
+    epoch = _FakeEpoch(stars, halo_pos=[[0, 0, 0]])
+    result = HydroGalaxyBackend().star_formation_history(
+        epoch, halo_row=0, time_bin_edges=[0.0, 1.0])
+    assert result is None
+
+
+def test_sfh_bins_formation_mass_by_lookback_age():
+    a_form = np.array([0.999, 0.5])  # one very recent, one ancient
+    initmass = np.array([1.0e5, 2.0e5])
+    stars = _FakeStars({
+        "pos": [[0, 0, 0]] * 2, "mass": [9.0e4, 1.9e5],
+        "initmass": initmass, "age": a_form,
+    }, meta=COSMO)
+    epoch = _FakeEpoch(stars, halo_pos=[[0, 0, 0]])
+
+    t_now = _cosmic_time_gyr(1.0, 0.7, 0.3, 0.7)
+    lookback = t_now - _cosmic_time_gyr(a_form, 0.7, 0.3, 0.7)
+    # bin edges chosen so the two ages fall in different, known bins
+    edges = np.array([0.0, 1.0, 15.0])
+    assert lookback[0] < 1.0 < lookback[1]  # sanity: recent vs ancient
+
+    result = HydroGalaxyBackend().star_formation_history(
+        epoch, halo_row=0, time_bin_edges=edges)
+
+    expected = np.zeros(2)
+    expected[0] = initmass[0] / ((edges[1] - edges[0]) * 1.0e9)
+    expected[1] = initmass[1] / ((edges[2] - edges[1]) * 1.0e9)
+    np.testing.assert_allclose(result, expected)
+
+
+def test_sfh_falls_back_to_mass_when_no_initmass():
+    stars = _FakeStars({
+        "pos": [[0, 0, 0]], "mass": [1.0e5], "age": [0.999],
+    }, meta=COSMO)
+    epoch = _FakeEpoch(stars, halo_pos=[[0, 0, 0]])
+
+    result = HydroGalaxyBackend().star_formation_history(
+        epoch, halo_row=0, time_bin_edges=[0.0, 1.0])
+    assert result[0] == pytest.approx(1.0e5 / (1.0 * 1.0e9))

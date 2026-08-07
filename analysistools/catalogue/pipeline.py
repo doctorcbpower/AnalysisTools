@@ -275,11 +275,21 @@ class CrossMatchStage(PipelineStage):
     this stage only broadcasts the host's own ID to every satellite row as
     ``Satellites/Identification/HostHaloID``.
 
-    Galaxy cross-matching (``SharkGalaxyID``, ``GalaxyProperties/*``) is
-    skipped when ``galaxy_backend=None`` (the default): both
-    ``GalaxyBackend`` implementations are themselves still Phase 6b stubs
-    (``galaxy_properties()`` raises ``NotImplementedError``), so there is
-    nothing to actually call yet. Pass one in once that's implemented.
+    Galaxy cross-matching: when ``galaxy_backend`` (and ``epoch``, needed
+    to actually call it) are given, ``galaxy_backend.galaxy_properties()``
+    is called once per satellite (post-sort, so results land in canonical
+    row order already) and every field any satellite returned becomes a
+    ``Satellites/GalaxyProperties/<field>`` column, ``NaN`` for satellites
+    that didn't return that particular field -- matching the
+    ``GalaxyBackend`` protocol's "omit, don't fabricate" contract at the
+    per-satellite level, but an array output needs *some* fill value once
+    stacked across satellites, hence NaN here specifically. Skipped (with
+    a warning, not a crash) if ``galaxy_backend`` is given without
+    ``epoch``, or before ``HaloExtractStage`` has populated
+    ``Satellites/_internal/halo_row``. ``SharkGalaxyID`` (the foreign key
+    into the native SHARK table) isn't produced here -- neither backend
+    exposes the underlying galaxy's native ID through the
+    ``GalaxyBackend`` protocol currently.
 
     Row-permutation convention: every ``context.columns`` key under
     ``'Satellites/'`` or ``'MergerTrees/'`` is treated as satellite-indexed
@@ -293,8 +303,9 @@ class CrossMatchStage(PipelineStage):
     outputs = ("Satellites/Identification/SatelliteID",
               "Satellites/Identification/HostHaloID")
 
-    def __init__(self, galaxy_backend=None):
+    def __init__(self, galaxy_backend=None, epoch=None):
         self.galaxy_backend = galaxy_backend
+        self.epoch = epoch
 
     def run(self, context: PipelineContext) -> PipelineContext:
         subhalo_id = np.asarray(
@@ -320,14 +331,38 @@ class CrossMatchStage(PipelineStage):
         context.columns["Satellites/Identification/HostHaloID"] = \
             np.full(n, host_id, dtype=np.int64)
 
+        n_galaxy_matched = None
         if self.galaxy_backend is not None:
-            logger.warning(
-                "%s: galaxy_backend given but SharkGalaxyID/"
-                "GalaxyProperties cross-matching isn't implemented yet "
-                "(galaxy_backend.galaxy_properties() is itself still a "
-                "Phase 6b stub) -- skipping.", self.name)
+            if self.epoch is None:
+                logger.warning(
+                    "%s: galaxy_backend given but epoch= wasn't -- "
+                    "skipping galaxy cross-matching "
+                    "(galaxy_backend.galaxy_properties() needs an Epoch "
+                    "to call).", self.name)
+            elif "Satellites/_internal/halo_row" not in context.columns:
+                logger.warning(
+                    "%s: galaxy_backend given but no Satellites/_internal/"
+                    "halo_row in context (run HaloExtractStage first) -- "
+                    "skipping galaxy cross-matching.", self.name)
+            else:
+                halo_rows = context.columns["Satellites/_internal/halo_row"]
+                per_satellite = [
+                    self.galaxy_backend.galaxy_properties(self.epoch, int(row))
+                    for row in halo_rows
+                ]
+                field_names = sorted(
+                    {k for props in per_satellite for k in props})
+                for field in field_names:
+                    values = np.full(n, np.nan)
+                    for i, props in enumerate(per_satellite):
+                        if field in props:
+                            values[i] = props[field]
+                    context.columns[
+                        f"Satellites/GalaxyProperties/{field}"] = values
+                n_galaxy_matched = sum(1 for p in per_satellite if p)
 
-        context.record_stage(self.name, n_satellites=n, host_id=host_id)
+        context.record_stage(self.name, n_satellites=n, host_id=host_id,
+                             n_galaxy_matched=n_galaxy_matched)
         return context
 
 
