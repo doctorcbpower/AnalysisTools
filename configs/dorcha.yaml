@@ -12,6 +12,12 @@ galaxy_backend: shark           # shark | hydro (backends.py)
 galaxy_backend_options:
   match_by: position            # SharkGalaxyBackend: position | id
   r_scale: 1.0
+  # compute_photometry: true    # LuminosityV/Luminosity_ugriz/
+  #                              # AbsoluteMagnitude_ugriz via real FSPS SSP
+  #                              # convolution (shark.photometry) -- needs
+  #                              # python-fsps installed with SPS_HOME set,
+  #                              # and is much slower per satellite than
+  #                              # every other field; off by default.
 
 derived_stages:                 # names resolve via derived.STAGES; order matters
   - halo_properties

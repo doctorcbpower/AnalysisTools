@@ -20,7 +20,7 @@ between projects") and DEVELOPMENT.md Phase 6.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol, Sequence
 
 import logging
 
@@ -110,6 +110,27 @@ def rebin_sfh(native_edges: np.ndarray, native_sfr: np.ndarray,
     return output_mass / output_widths
 
 
+#: FSPS bands SharkGalaxyBackend requests when compute_photometry=True --
+#: "v" (Buser V) plus fsps's standard SDSS filter names. Not validated
+#: here (a wrong name only surfaces as an fsps error at first photometry
+#: call, which needs a real python-fsps install to hit regardless).
+DEFAULT_PHOTOMETRY_BANDS = ("v", "sdss_u", "sdss_g", "sdss_r", "sdss_i",
+                           "sdss_z")
+
+#: AB absolute solar magnitude per band -- the reference needed to convert
+#: an FSPS absolute AB magnitude into a solar-luminosity ratio (L/Lsun =
+#: 10^(-0.4*(M - M_sun))). "v" (4.83) matches the constant
+#: ``shark.photometry.PhotometryPipeline.mass_to_light`` already uses, for
+#: consistency within this package; SDSS ugriz values are the AB solar
+#: magnitudes from Willmer (2018, ApJS 236, 47), Table 3.
+SOLAR_ABSOLUTE_MAGNITUDE = {
+    "v": 4.83,
+    "sdss_u": 6.39, "sdss_g": 5.11, "sdss_r": 4.65,
+    "sdss_i": 4.53, "sdss_z": 4.50,
+}
+_UGRIZ_BANDS = ("sdss_u", "sdss_g", "sdss_r", "sdss_i", "sdss_z")
+
+
 class SharkGalaxyBackend:
     """Galaxy properties from a SHARK semi-analytic catalogue, matched to
     the halo catalogue via ``Epoch.galaxies_in_halo`` (position matching by
@@ -137,6 +158,15 @@ class SharkGalaxyBackend:
       here (see units caveat below).
     - ``SharkGalaxyID``: native ``id_galaxy``, the foreign key into the
       SHARK output the schema field is documented as.
+    - ``LuminosityV``, ``Luminosity_ugriz``, ``AbsoluteMagnitude_ugriz``:
+      only when constructed with ``compute_photometry=True`` -- see below.
+      Off by default: FSPS SSP convolution is orders of magnitude more
+      expensive per galaxy than every other field here, needs
+      python-fsps installed with its SSP template data (``SPS_HOME``) --
+      a heavier, optional dependency this backend doesn't otherwise need
+      -- and is only meaningful for a *model-backed* ``GalaxyCatalogue``
+      (same restriction as ``star_formation_history()``, since it needs
+      the native per-snapshot SFH ``shark.photometry`` convolves).
 
     Units caveat (same as ``pipeline.HaloExtractStage``/
     ``derived.EnvironmentStage``): values are returned exactly as
@@ -145,22 +175,59 @@ class SharkGalaxyBackend:
     *also* a Gyr-vs-yr mismatch against schema.py's declared "Msun/yr",
     not just little-h), not schema.py's declared units. Unit
     reconciliation isn't implemented anywhere in this pipeline yet.
+    ``LuminosityV``/``Luminosity_ugriz`` are the one exception: FSPS
+    absolute magnitudes are h-independent, so the Lsun values derived from
+    them are too.
 
     Deliberately **not** returned, documented rather than guessed:
-    ``LuminosityV``/``Luminosity_ugriz``/``AbsoluteMagnitude_ugriz`` (need
-    ``shark.photometry``'s separate, optional fsps-based pipeline -- not
-    wired into this backend), ``HalfLightRadius`` (depends on
-    luminosity), ``HalfMassRadiusStellar`` (``rstar_disk``/``rstar_bulge``
-    are exponential/profile scale lengths, not half-mass radii --
-    converting one to the other needs an assumed disk/bulge profile
-    shape), ``SersicIndex`` (SHARK produces no structural fit at all).
+    ``HalfLightRadius`` (depends on a light *profile*, not just total
+    luminosity -- FSPS gives an SED, not a spatial distribution),
+    ``HalfMassRadiusStellar`` (``rstar_disk``/``rstar_bulge`` are
+    exponential/profile scale lengths, not half-mass radii -- converting
+    one to the other needs an assumed disk/bulge profile shape),
+    ``SersicIndex`` (SHARK produces no structural fit at all).
     """
 
     name = "shark"
 
-    def __init__(self, match_by: str = "position", r_scale: float = 1.0):
+    def __init__(self, match_by: str = "position", r_scale: float = 1.0,
+                 compute_photometry: bool = False,
+                 photometry_bands: Sequence[str] = DEFAULT_PHOTOMETRY_BANDS,
+                 photometry_options: Optional[Dict[str, Any]] = None,
+                 photometry_pipeline_factory=None):
+        """
+        Parameters
+        ----------
+        compute_photometry : bool
+            If True, ``galaxy_properties()`` also computes
+            ``LuminosityV``/``Luminosity_ugriz``/``AbsoluteMagnitude_ugriz``
+            via ``shark.photometry.PhotometryPipeline`` (real python-fsps
+            SSP convolution -- requires it installed with ``SPS_HOME``
+            set). Default False.
+        photometry_bands : sequence of str
+            FSPS filter names to request; must include ``"v"`` and every
+            name in ``("sdss_u", "sdss_g", "sdss_r", "sdss_i", "sdss_z")``
+            for the corresponding output field to be populated (a band
+            missing from this list simply leaves that field/entry
+            unpopulated, same "omit, don't fabricate" contract as every
+            other field). Default ``DEFAULT_PHOTOMETRY_BANDS`` (all six).
+        photometry_options : dict, optional
+            Extra kwargs forwarded to ``PhotometryPipeline`` (e.g.
+            ``{"imf_type": 1, "add_dust": True}``).
+        photometry_pipeline_factory : callable, optional
+            ``(model, z_obs, bands=..., progress=..., **photometry_options)
+            -> PhotometryPipeline``-like object exposing ``.abs_mags(idx)``.
+            Defaults to the real ``shark.photometry.PhotometryPipeline``;
+            override for testing (avoids a real fsps/SPS_HOME dependency)
+            or to reuse a pipeline built elsewhere.
+        """
         self.match_by = match_by
         self.r_scale = r_scale
+        self.compute_photometry = compute_photometry
+        self.photometry_bands = list(photometry_bands)
+        self.photometry_options = dict(photometry_options or {})
+        self._photometry_pipeline_factory = photometry_pipeline_factory
+        self._photometry_cache: Dict[Any, Any] = {}
 
     def _match_central(self, epoch, halo_row: int):
         """Shared by galaxy_properties() and star_formation_history(): the
@@ -224,7 +291,72 @@ class SharkGalaxyBackend:
         if galaxy_id is not None:
             props["SharkGalaxyID"] = int(galaxy_id)
 
+        if self.compute_photometry:
+            self._add_photometry(props, matched, central, epoch)
+
         return props
+
+    def _photometry_pipeline_for(self, model, z_obs: float):
+        """One ``PhotometryPipeline`` per (model, z_obs), cached and
+        reused across every ``galaxy_properties()`` call in a catalogue
+        build -- constructing FSPS's ``StellarPopulation`` is far too
+        expensive to redo per satellite (see ``shark.photometry.sps``'s
+        own "reused across all galaxies" design note)."""
+        key = (id(model), float(z_obs))
+        if key not in self._photometry_cache:
+            factory = self._photometry_pipeline_factory
+            if factory is None:
+                from ..shark.photometry import PhotometryPipeline
+                factory = PhotometryPipeline
+            self._photometry_cache[key] = factory(
+                model, z_obs, bands=self.photometry_bands, progress=False,
+                **self.photometry_options)
+        return self._photometry_cache[key]
+
+    def _add_photometry(self, props: Dict[str, Any], matched, central: int,
+                        epoch) -> None:
+        """Adds ``LuminosityV``/``Luminosity_ugriz``/
+        ``AbsoluteMagnitude_ugriz`` to ``props`` in place, or leaves them
+        unset -- never NaN-fills -- on any of: no model-backed catalogue
+        (same restriction as ``star_formation_history()``), no epoch
+        redshift, or an FSPS failure for this specific galaxy (logged as a
+        warning, not raised -- one galaxy's SED failing shouldn't abort
+        an entire catalogue build)."""
+        model = getattr(matched, "model", None)
+        if model is None:
+            return
+        redshift = getattr(epoch, "redshift", None)
+        if redshift is None:
+            return
+
+        row = int(matched.index[central])
+        try:
+            pipeline = self._photometry_pipeline_for(model, redshift)
+            mags = np.asarray(pipeline.abs_mags(np.array([row])))[0]
+        except Exception:
+            logger.warning(
+                "%s: photometry failed for galaxy row %d; LuminosityV/"
+                "Luminosity_ugriz/AbsoluteMagnitude_ugriz omitted.",
+                self.name, row, exc_info=True)
+            return
+
+        band_index = {b: i for i, b in enumerate(self.photometry_bands)}
+
+        v_idx = band_index.get("v")
+        if v_idx is not None and not np.isnan(mags[v_idx]):
+            props["LuminosityV"] = float(10.0 ** (
+                -0.4 * (mags[v_idx] - SOLAR_ABSOLUTE_MAGNITUDE["v"])))
+
+        if all(band in band_index for band in _UGRIZ_BANDS):
+            ugriz_mags = np.array(
+                [mags[band_index[band]] for band in _UGRIZ_BANDS])
+            if not np.all(np.isnan(ugriz_mags)):
+                props["AbsoluteMagnitude_ugriz"] = ugriz_mags
+                sun_mags = np.array(
+                    [SOLAR_ABSOLUTE_MAGNITUDE[band] for band in _UGRIZ_BANDS])
+                with np.errstate(invalid="ignore"):
+                    props["Luminosity_ugriz"] = \
+                        10.0 ** (-0.4 * (ugriz_mags - sun_mags))
 
     def native_comoving_little_h(self, epoch=None):
         """(comoving, little_h) of the values ``galaxy_properties()``
