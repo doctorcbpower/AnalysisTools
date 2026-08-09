@@ -1,6 +1,6 @@
 # Master Science Catalogues (`analysistools.catalogue`)
 
-**Status:** Phase 6a done (schema + read-side); Phase 6b (pipeline/derived quantities) and 6c (validation/webreport) not yet implemented. See DEVELOPMENT.md for the phase breakdown.
+**Status:** Phases 6a/6c done; 6b's core pipeline (extraction, cross-matching, every derived-quantity stage, both galaxy backends incl. optional FSPS photometry) is implemented, with a documented list of individually-deferred fields needing infrastructure or modelling decisions this codebase doesn't have yet. See [phase6_remaining_work.md](phase6_remaining_work.md) for the full breakdown and DEVELOPMENT.md for the phase history.
 
 `analysistools.catalogue` turns the read-side unified interface (`Dataset`/`Simulation`/`Epoch`, see [unified_interface.md](unified_interface.md)) into a **write-side** pipeline that builds one flat, versioned, self-describing HDF5 catalogue per project — the single input every downstream science notebook reads from. The design originates from the Dorcha project (Milky-Way-analogue satellites + SHARK galaxies) but nothing in it is Dorcha-specific: it is a *template*, driven entirely by a project config, so a future hydrodynamic suite (Arepo-Solas, SWIFT) reuses the same package with a different config and a different galaxy backend rather than a different codebase.
 
