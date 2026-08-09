@@ -558,15 +558,29 @@ class write_hdf5:
                         self._write_smoothing_lengths(group, i, mask)
                     elif i==getattr(self,'star_type',4):
                         self._write_smoothing_lengths(group, i, mask)
-                if getattr(self,'gas_Z',None) is not None and i==getattr(self,'gas_type',0):
+                # Attribute names here must match what read_snapshot()
+                # actually sets (see _allocate_extra_block_memory): gas_Z/
+                # stellar_Z/initmass/sfr were never the real attribute
+                # names (gas_metallicity/stellar_metallicity/
+                # stellarinitmass/gas_sfr are), so those checks were
+                # previously always False -- a snapshot read back in and
+                # re-written would silently drop these blocks even when
+                # they were present on this object. SFR is gated on
+                # gas_type (it's a gas quantity, self.gas_sfr) not
+                # star_type -- that was a second, separate bug found
+                # alongside the species-local-indexing one fixed in
+                # _write_metallicities/_write_star_formation_rates/
+                # _write_stellar_ages/_write_stellar_init_mass (see
+                # _species_local_idx).
+                if getattr(self,'gas_metallicity',None) is not None and i==getattr(self,'gas_type',0):
                     self._write_metallicities(group, i, mask, metallicity_type='gas')
-                if getattr(self,'stellar_Z',None) is not None and i==getattr(self,'star_type',4):
+                if getattr(self,'stellar_metallicity',None) is not None and i==getattr(self,'star_type',4):
                     self._write_metallicities(group, i, mask, metallicity_type='stellar')
-                if getattr(self,'sfr',None) is not None and i==getattr(self,'star_type',4):
+                if getattr(self,'gas_sfr',None) is not None and i==getattr(self,'gas_type',0):
                     self._write_star_formation_rates(group, i, mask)
-                if getattr(self,'age',None) is not None and i==getattr(self,'star_type',4):
+                if getattr(self,'stellarage',None) is not None and i==getattr(self,'star_type',4):
                     self._write_stellar_ages(group, i, mask)
-                if getattr(self,'initmass',None) is not None and i==getattr(self,'star_type',4):
+                if getattr(self,'stellarinitmass',None) is not None and i==getattr(self,'star_type',4):
                     self._write_stellar_init_mass(group, i, mask)
 
     def _write_positions(self, group, i, mask):
@@ -630,17 +644,61 @@ class write_hdf5:
             "h-scale-exponent": -1,
         })
         
+    def _original_ptype(self):
+        """Particle type of each row of the *original*, un-reordered
+        particle arrays (``pos``/``mass``/species-only arrays like
+        ``gas_metallicity`` are all indexed this way), reconstructed and
+        cached on first use.
+
+        ``self.ptype`` (set from the ``idx_type`` constructor argument) is
+        *not* this -- it's indexed by output position, parallel to
+        ``self.idx`` (``self.ptype[k]`` is the type of whatever original
+        row ``self.idx[k]`` refers to), since that's what
+        ``_write_particles``'s per-type-group loop needs. The writer is
+        never given the original array's own type column directly (see
+        ``SnapshotTools._transfer_attributes_to_writer``/
+        ``_transfer_datasets_to_writer`` -- ``ptype`` isn't in either
+        transfer list), so it's recovered here by inverting
+        ``self.idx``'s row selection: ``original_ptype[self.idx[k]] =
+        self.ptype[k]`` for every output position ``k``. Valid as long as
+        ``self.idx`` references each original row at most once (true for
+        both the "write everything, unreordered" case, where ``idx`` is
+        ``arange(N)``, and any subset/permutation of it).
+        """
+        if not hasattr(self, "_original_ptype_cache"):
+            original_ptype = np.empty(int(np.max(self.idx)) + 1,
+                                      dtype=self.ptype.dtype)
+            original_ptype[self.idx] = self.ptype
+            self._original_ptype_cache = original_ptype
+        return self._original_ptype_cache
+
+    def _species_local_idx(self, mask, species_type):
+        """
+        For a species-only array (sized to just that species' particle
+        count -- e.g. gas-only ``u``/``rho``/``hsml``/``gas_metallicity``/
+        ``gas_sfr``, or star-only ``stellar_metallicity``/``stellarage``/
+        ``stellarinitmass``, see ``_allocate_extra_block_memory``),
+        convert ``self.idx[mask]`` (indices into the full, un-reordered
+        particle arrays like ``pos``/``mass`` -- valid for those, but not
+        for a species-only array) into indices into that species' own
+        0..n_species-1 sub-array. Assumes the species-only array was
+        populated (during reading) in the same order that species'
+        particles appear when scanning the *original* particle array
+        (see ``_original_ptype``), which is how
+        ``_read_particle_data_single_file`` fills them.
+        """
+        original_ptype = self._original_ptype()
+        species_positions = np.where(original_ptype == species_type)[0]
+        full_to_species = np.empty(len(original_ptype), dtype=np.int64)
+        full_to_species[species_positions] = np.arange(len(species_positions))
+        return full_to_species[self.idx[mask]]
+
     def _gas_local_idx(self, mask):
-        """
-        For a gas-only array (u, rho, hsml), convert the full-particle
-        idx[mask] into indices into the gas-only sub-array.
-        """
-        gas_type = getattr(self, 'gas_type', 0)
-        gas_mask = self.ptype == gas_type
-        gas_positions = np.where(gas_mask)[0]
-        full_to_gas = np.empty(len(self.ptype), dtype=np.int64)
-        full_to_gas[gas_positions] = np.arange(len(gas_positions))
-        return full_to_gas[self.idx[mask]]
+        """For a gas-only array (u, rho, hsml) -- see
+        ``_species_local_idx``, which this is a thin convenience wrapper
+        around (gas being the first species this conversion was needed
+        for)."""
+        return self._species_local_idx(mask, getattr(self, 'gas_type', 0))
 
     def _write_internal_energies(self, group, i, mask, name_of_u_block):
         data_u = group.create_dataset(name_of_u_block, data=self.u[self._gas_local_idx(mask)])
@@ -669,10 +727,11 @@ class write_hdf5:
 
     def _write_metallicities(self, group, i, mask, metallicity_type='gas'):
         """Write gas or stellar metallicities into the HDF5 group."""
-        idx_i = self.idx[mask] 
         if metallicity_type == 'gas':
+            idx_i = self._species_local_idx(mask, getattr(self, 'gas_type', 0))
             data = self.gas_metallicity[idx_i]
         elif metallicity_type == 'stellar':
+            idx_i = self._species_local_idx(mask, getattr(self, 'star_type', 4))
             data = self.stellar_metallicity[idx_i]
         else:
             raise ValueError(f"Unknown metallicity_type '{metallicity_type}'")
@@ -685,7 +744,7 @@ class write_hdf5:
         })
 
     def _write_star_formation_rates(self, group, i, mask):
-        idx_i = self.idx[mask]
+        idx_i = self._species_local_idx(mask, getattr(self, 'gas_type', 0))
         data_sfr = group.create_dataset(
             'StarFormationRate',
             data=self.gas_sfr[idx_i],
@@ -697,7 +756,7 @@ class write_hdf5:
         })
 
     def _write_stellar_ages(self, group, i, mask):
-        idx_i = self.idx[mask]
+        idx_i = self._species_local_idx(mask, getattr(self, 'star_type', 4))
         data_age = group.create_dataset(
             'StellarFormationTime',
             data=self.stellarage[idx_i],
@@ -709,7 +768,7 @@ class write_hdf5:
         })
 
     def _write_stellar_init_mass(self, group, i, mask):
-        idx_i = self.idx[mask]
+        idx_i = self._species_local_idx(mask, getattr(self, 'star_type', 4))
         data_stellarinitmass = group.create_dataset(
             'StellarInitMass',
             data=self.stellarinitmass[idx_i],

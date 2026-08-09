@@ -29,6 +29,8 @@ _RAW_ATTR_ALIASES = {
     "gas_Z": "gas_metallicity",
     "stellar_Z": "stellar_metallicity",
     "initmass": "stellarinitmass",
+    "sfr": "gas_sfr",
+    "age": "stellarage",
 }
 
 #: Whether each convention's *raw*, on-disk length/mass values already
@@ -136,14 +138,20 @@ class SnapshotDataset(Dataset):
         for name in ("pos", "vel", "pids", "mass", "ptype", "potential",
                      "rho", "u", "sfr", "age", "groupid", "hsml",
                      "gas_Z", "stellar_Z", "initmass"):
-            # gas_Z/stellar_Z/initmass are the documented public names
-            # (docs/snapshots.md "Supported Data Blocks"), but the reader
-            # actually sets gas_metallicity/stellar_metallicity/
-            # stellarinitmass -- a separate pre-existing read/write naming
-            # mismatch (the *writer* checks for gas_Z/stellar_Z/initmass,
-            # which the reader never sets either) not fixed here, just
-            # worked around on the read side so these blocks are reachable
-            # at all through the unified interface.
+            # gas_Z/stellar_Z/initmass/sfr/age are the documented public
+            # names (docs/snapshots.md "Supported Data Blocks"), but the
+            # reader actually sets gas_metallicity/stellar_metallicity/
+            # stellarinitmass/gas_sfr/stellarage -- a pre-existing
+            # snapio_hdf5.py naming inconsistency between its own read and
+            # write sides (see _write_particles's fixed-up gas_Z/stellar_Z/
+            # initmass attribute lookups), worked around here on the read
+            # side via _RAW_ATTR_ALIASES so these blocks are reachable at
+            # all through the unified interface -- without this alias,
+            # e.g. HydroGalaxyBackend's age-dependent fields
+            # (MeanStellarAge/StarFormationRate/SFH) would silently never
+            # find "age" on any real hydro snapshot (the bundled DMO test
+            # snapshot has no star particles, so this never surfaced in
+            # this package's own tests until now).
             arr = getattr(d, name, None)
             if arr is None:
                 arr = getattr(d, _RAW_ATTR_ALIASES.get(name, ""), None)
