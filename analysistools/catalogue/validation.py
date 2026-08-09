@@ -12,9 +12,11 @@ the framework and the first three categories as concrete classes.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
+import json
 import logging
 
 import numpy as np
@@ -59,8 +61,15 @@ class ValidationReport:
                                         else ""))
 
     def to_json(self) -> str:
-        raise NotImplementedError(
-            "Phase 6c: serialise for Provenance/validation_report.")
+        """Serialise for ``Provenance/validation_report`` (written by
+        ``pipeline.WriteStage`` when a report is attached to
+        ``context.meta``)."""
+        return json.dumps({
+            "passed": self.passed,
+            "n_errors": len(self.errors),
+            "n_warnings": len(self.warnings),
+            "issues": [asdict(issue) for issue in self.issues],
+        }, indent=2)
 
 
 class Validator(ABC):
@@ -232,25 +241,244 @@ class SchemaValidator(Validator):
 class IntegrityValidator(Validator):
     """SatelliteID uniqueness and row-count consistency across every
     subgroup (the row-order invariant); no orphaned foreign keys; no
-    unexpected NaN/inf outside an allowed-missingness mask; particle-tag
-    CSR offsets monotonically non-decreasing."""
+    unexpected inf (this pipeline's documented "not computed" sentinel is
+    always NaN, never inf -- see every ``derived.py`` stage's own
+    docstring -- so an inf anywhere is always a real bug, e.g. a
+    divide-by-zero, not a legitimate missingness value; that makes "no
+    unexpected inf" precise without needing a separately-specified
+    allowed-missingness mask); particle-tag CSR offsets monotonically
+    non-decreasing.
+
+    ``schema`` is accepted (per the ``Validator`` interface) but unused --
+    every check here is about internal consistency of ``context.columns``
+    itself, not about the schema."""
 
     name = "integrity"
 
     def check(self, context, schema) -> ValidationReport:
-        raise NotImplementedError("Phase 6c.")
+        report = ValidationReport()
+        cols = context.columns
+
+        lengths: Dict[str, int] = {}
+        for path, value in cols.items():
+            if not (path.startswith("Satellites/")
+                    or path.startswith("MergerTrees/")):
+                continue
+            try:
+                lengths[path] = len(value)
+            except TypeError:
+                continue
+
+        if lengths:
+            canonical_path = "Satellites/Identification/SatelliteID"
+            canonical_n = lengths.get(canonical_path)
+            if canonical_n is None:
+                canonical_n = Counter(lengths.values()).most_common(1)[0][0]
+            for path, n in lengths.items():
+                if n != canonical_n:
+                    report.add(
+                        "error", "row_count",
+                        f"{path}: length {n} does not match the "
+                        f"catalogue's satellite row count ({canonical_n}).",
+                        field=path)
+
+        satellite_id = cols.get("Satellites/Identification/SatelliteID")
+        if satellite_id is not None:
+            ids = np.asarray(satellite_id)
+            unique, counts = np.unique(ids, return_counts=True)
+            duplicated = unique[counts > 1]
+            if duplicated.size:
+                shown = sorted(duplicated.tolist())[:10]
+                report.add(
+                    "error", "satellite_id_uniqueness",
+                    f"{duplicated.size} duplicated SatelliteID value(s): "
+                    f"{shown}" + (" ..." if duplicated.size > 10 else ""),
+                    field="Satellites/Identification/SatelliteID")
+
+        host_ids = cols.get("Satellites/Identification/HostHaloID")
+        known_hosts = cols.get("Haloes/HostHaloID")
+        if host_ids is not None and known_hosts is not None:
+            known = set(np.asarray(known_hosts).tolist())
+            orphaned = sorted(set(np.asarray(host_ids).tolist()) - known)
+            if orphaned:
+                shown = orphaned[:10]
+                report.add(
+                    "error", "orphaned_foreign_key",
+                    f"{len(orphaned)} satellite(s) reference HostHaloID "
+                    f"value(s) not present in Haloes/HostHaloID: {shown}"
+                    + (" ..." if len(orphaned) > 10 else ""),
+                    field="Satellites/Identification/HostHaloID")
+
+        for path, value in cols.items():
+            if isinstance(value, list):
+                continue
+            arr = np.asarray(value)
+            if not np.issubdtype(arr.dtype, np.floating):
+                continue
+            n_inf = int(np.count_nonzero(np.isinf(arr)))
+            if n_inf:
+                report.add(
+                    "error", "unexpected_inf",
+                    f"{path}: {n_inf} inf value(s) -- 'not computed' is "
+                    f"always represented as NaN in this pipeline, never "
+                    f"inf, so this indicates a real bug rather than a "
+                    f"documented missingness sentinel.", field=path)
+
+        offsets = cols.get("Satellites/ParticleTags/particle_id_offsets")
+        if offsets is not None:
+            offsets_arr = np.asarray(offsets)
+            if offsets_arr.size > 1 and np.any(np.diff(offsets_arr) < 0):
+                report.add(
+                    "error", "csr_offsets_not_monotonic",
+                    "Satellites/ParticleTags/particle_id_offsets is not "
+                    "monotonically non-decreasing -- the CSR particle-tag "
+                    "index is corrupt.",
+                    field="Satellites/ParticleTags/particle_id_offsets")
+
+        return report
 
 
 class PhysicalValidator(Validator):
-    """Mpeak >= M200c_z0; RedshiftInfall monotonic along accretion
-    history; OrbitalApocentre >= OrbitalPericentre; HeliocentricDistance >
-    0; CompletenessWeight >= 1; SFH bins sum to StellarMass within
-    tolerance."""
+    """Mpeak >= M200c_z0; OrbitalApocentre >= OrbitalPericentre;
+    HeliocentricDistance > 0; CompletenessWeight >= 1; a backsplash
+    satellite has at least one recorded infall; total SFH-formed mass >=
+    StellarMass.
+
+    Two checks deliberately deviate from the one-line description
+    originally sketched for this validator, for the same reason
+    ``derived.StarFormationHistoryStage`` deviates from the schema's
+    literal quenching definition -- the literal version isn't actually
+    true of realistic physics, so checking it as written would flag
+    correct catalogues as broken:
+
+    - "RedshiftInfall monotonic along accretion history" isn't a
+      well-defined check: ``RedshiftInfall`` is a single scalar (the one
+      infall event ``HaloPropertiesStage`` records), not a per-snapshot
+      history, so there is nothing to walk monotonically. Substituted:
+      every satellite flagged ``IsBacksplash`` must have
+      ``NumberOfInfalls >= 1`` -- a backsplash satellite (currently
+      outside the host after having been inside) must, by definition, have
+      had at least one recorded infall.
+    - "SFH bins sum to StellarMass within tolerance" ignores stellar mass
+      loss/return (evolved stars return gas to the ISM), so an *exact*
+      match would only hold for a population with zero mass loss --
+      checking equality would flag every realistically-evolved galaxy.
+      Substituted: total mass formed (the SFH integral) must be >=
+      ``StellarMass`` (mass loss can only reduce today's stellar mass
+      below what was formed, never increase it), with a small numerical
+      tolerance for floating-point roundoff.
+
+    Every check skips NaN/absent inputs rather than flagging them --
+    "not computed" is a legitimate, documented state (see e.g.
+    ``StarFormationHistoryStage``'s "no computable SFH" case); a physical
+    plausibility check only applies to values that were actually
+    computed. ``schema`` is accepted (per the ``Validator`` interface) but
+    unused -- these are physical relationships between already-identified
+    fields, not schema-driven.
+    """
 
     name = "physical"
 
     def check(self, context, schema) -> ValidationReport:
-        raise NotImplementedError("Phase 6c.")
+        report = ValidationReport()
+        cols = context.columns
+
+        def _pair(path_a, path_b):
+            a, b = cols.get(path_a), cols.get(path_b)
+            if a is None or b is None:
+                return None
+            a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+            return a, b, ~np.isnan(a) & ~np.isnan(b)
+
+        pair = _pair("Satellites/HaloProperties/Mpeak",
+                    "Satellites/HaloProperties/M200c_z0")
+        if pair is not None:
+            mpeak, m200c_z0, valid = pair
+            bad = valid & (mpeak < m200c_z0)
+            if np.any(bad):
+                report.add(
+                    "error", "mpeak_below_m200c_z0",
+                    f"{int(np.count_nonzero(bad))} satellite(s) have "
+                    f"Mpeak < M200c_z0 -- the peak historical mass cannot "
+                    f"be below the present-day mass.",
+                    field="Satellites/HaloProperties/Mpeak")
+
+        pair = _pair("Satellites/HaloProperties/OrbitalApocentre",
+                    "Satellites/HaloProperties/OrbitalPericentre")
+        if pair is not None:
+            apo, peri, valid = pair
+            bad = valid & (apo < peri)
+            if np.any(bad):
+                report.add(
+                    "error", "apocentre_below_pericentre",
+                    f"{int(np.count_nonzero(bad))} satellite(s) have "
+                    f"OrbitalApocentre < OrbitalPericentre.",
+                    field="Satellites/HaloProperties/OrbitalApocentre")
+
+        helio = cols.get("Satellites/Observability/HeliocentricDistance")
+        if helio is not None:
+            helio = np.asarray(helio, dtype=float)
+            valid = ~np.isnan(helio)
+            bad = valid & (helio <= 0)
+            if np.any(bad):
+                report.add(
+                    "error", "non_positive_heliocentric_distance",
+                    f"{int(np.count_nonzero(bad))} satellite(s) have "
+                    f"HeliocentricDistance <= 0.",
+                    field="Satellites/Observability/HeliocentricDistance")
+
+        completeness = cols.get("Satellites/Observability/CompletenessWeight")
+        if completeness is not None:
+            completeness = np.asarray(completeness, dtype=float)
+            valid = ~np.isnan(completeness)
+            bad = valid & (completeness < 1.0)
+            if np.any(bad):
+                report.add(
+                    "error", "completeness_weight_below_one",
+                    f"{int(np.count_nonzero(bad))} satellite(s) have "
+                    f"CompletenessWeight < 1.",
+                    field="Satellites/Observability/CompletenessWeight")
+
+        is_backsplash = cols.get("Satellites/HaloProperties/IsBacksplash")
+        n_infalls = cols.get("Satellites/HaloProperties/NumberOfInfalls")
+        if is_backsplash is not None and n_infalls is not None:
+            is_backsplash = np.asarray(is_backsplash, dtype=bool)
+            n_infalls = np.asarray(n_infalls)
+            bad = is_backsplash & (n_infalls < 1)
+            if np.any(bad):
+                report.add(
+                    "error", "backsplash_without_infall",
+                    f"{int(np.count_nonzero(bad))} satellite(s) are "
+                    f"flagged IsBacksplash but have NumberOfInfalls < 1 -- "
+                    f"a backsplash satellite must have had at least one "
+                    f"recorded infall.",
+                    field="Satellites/HaloProperties/IsBacksplash")
+
+        sfh = cols.get("Satellites/GalaxyProperties/SFH")
+        stellar_mass = cols.get("Satellites/GalaxyProperties/StellarMass")
+        time_bin_edges = context.meta.get("time_bin_edges_sfh")
+        if (sfh is not None and stellar_mass is not None
+                and time_bin_edges is not None):
+            sfh = np.asarray(sfh, dtype=float)
+            stellar_mass = np.asarray(stellar_mass, dtype=float)
+            widths_yr = np.diff(
+                np.asarray(time_bin_edges, dtype=float)) * 1.0e9
+            with np.errstate(invalid="ignore"):
+                formed_mass = np.nansum(sfh * widths_yr, axis=1)
+            has_sfh = ~np.all(np.isnan(sfh), axis=1)
+            valid = has_sfh & ~np.isnan(stellar_mass)
+            bad = valid & (formed_mass < stellar_mass * (1.0 - 1e-6))
+            if np.any(bad):
+                report.add(
+                    "error", "stellar_mass_exceeds_formed_mass",
+                    f"{int(np.count_nonzero(bad))} satellite(s) have "
+                    f"StellarMass exceeding the total mass formed "
+                    f"(integral of SFH) -- current stellar mass can only "
+                    f"be less than or equal to formed mass (mass "
+                    f"loss/return), never greater.",
+                    field="Satellites/GalaxyProperties/StellarMass")
+
+        return report
 
 
 DEFAULT_VALIDATORS = [SchemaValidator(), IntegrityValidator(),

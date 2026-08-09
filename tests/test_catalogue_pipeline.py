@@ -1,15 +1,16 @@
 """
 Tests for analysistools.catalogue.pipeline's PipelineContext/PipelineStage
-scaffolding, plus the ExtractStage base class and the still-unimplemented
-QualityControlStage/WriteStage/CatalogueBuilder (Phase 6c).
+scaffolding, plus the ExtractStage base class. QualityControlStage/
+WriteStage/CatalogueBuilder are implemented -- see
+test_catalogue_pipeline_quality_control.py, test_catalogue_pipeline_write.py,
+and test_catalogue_pipeline_builder.py.
 HaloExtractStage/TreeExtractStage/CrossMatchStage are implemented (Phase
 6b) and tested separately in test_catalogue_pipeline_extract_crossmatch.py.
 """
 import pytest
 
 from analysistools.catalogue.pipeline import (
-    CatalogueBuilder, ExtractStage, PipelineContext,
-    PipelineStage, QualityControlStage, WriteStage,
+    ExtractStage, PipelineContext, PipelineStage,
 )
 
 
@@ -132,42 +133,14 @@ def test_run_executes_and_records_provenance():
 
 
 # ---------------------------------------------------------------------------
-# Concrete stub stages / CatalogueBuilder -- still Phase 6b/6c, pin that
-# they fail loudly rather than silently. Update when implemented.
-#
-# HaloExtractStage/TreeExtractStage/CrossMatchStage are now implemented --
-# see test_catalogue_pipeline_extract_crossmatch.py for their tests. The
-# ExtractStage *base class* stays an unimplemented stub (particle tagging/
-# selection functions/Rubin detectability have no Epoch-side machinery yet).
+# ExtractStage base class -- deliberately stays an unimplemented stub
+# (particle tagging/selection functions/Rubin detectability have no
+# Epoch-side machinery yet); its two concrete subclasses
+# (HaloExtractStage/TreeExtractStage) are implemented and tested in
+# test_catalogue_pipeline_extract_crossmatch.py. CatalogueBuilder is
+# implemented -- see test_catalogue_pipeline_builder.py.
 # ---------------------------------------------------------------------------
 
 def test_extract_stage_base_not_yet_implemented():
     with pytest.raises(NotImplementedError, match="Phase 6b"):
         ExtractStage().run(PipelineContext())
-
-
-def test_quality_control_stage_not_yet_implemented():
-    with pytest.raises(NotImplementedError, match="Phase 6c"):
-        QualityControlStage().run(PipelineContext())
-
-
-def test_write_stage_not_yet_implemented(tmp_path):
-    stage = WriteStage(str(tmp_path / "out.h5"), schema=None)
-    with pytest.raises(NotImplementedError, match="Phase 6c"):
-        stage.run(PipelineContext())
-
-
-def test_catalogue_builder_load_config_not_yet_implemented():
-    with pytest.raises(NotImplementedError, match="Phase 6a"):
-        CatalogueBuilder("configs/dorcha.yaml")._load_config()
-
-
-def test_catalogue_builder_run_not_yet_implemented():
-    with pytest.raises(NotImplementedError, match=r"Phase 6b/6c"):
-        CatalogueBuilder("configs/dorcha.yaml").run(simulations=[])
-
-
-def test_catalogue_builder_run_from_stage_not_yet_implemented():
-    builder = CatalogueBuilder("configs/dorcha.yaml")
-    with pytest.raises(NotImplementedError, match="Phase 6b"):
-        builder.run_from_stage("extract", PipelineContext(), simulations=[])

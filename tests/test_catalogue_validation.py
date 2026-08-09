@@ -108,9 +108,29 @@ def test_summary_omits_field_parens_when_absent(capsys):
     assert "()" not in out
 
 
-def test_to_json_not_yet_implemented():
-    with pytest.raises(NotImplementedError, match="Phase 6c"):
-        ValidationReport().to_json()
+def test_to_json_round_trips_issue_fields():
+    import json
+    report = ValidationReport()
+    report.add("error", "schema", "missing Mpeak field", field="Mpeak")
+    report.add("warning", "physical", "borderline value")
+
+    data = json.loads(report.to_json())
+    assert data["passed"] is False
+    assert data["n_errors"] == 1
+    assert data["n_warnings"] == 1
+    assert data["issues"] == [
+        {"severity": "error", "check": "schema",
+         "message": "missing Mpeak field", "field": "Mpeak"},
+        {"severity": "warning", "check": "physical",
+         "message": "borderline value", "field": ""},
+    ]
+
+
+def test_to_json_empty_report():
+    import json
+    data = json.loads(ValidationReport().to_json())
+    assert data == {"passed": True, "n_errors": 0, "n_warnings": 0,
+                    "issues": []}
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +157,3 @@ def test_validator_name(validator_cls, expected_name):
     assert validator_cls().name == expected_name
 
 
-@pytest.mark.parametrize("validator_cls", [
-    IntegrityValidator, PhysicalValidator,
-])
-def test_validator_check_not_yet_implemented(validator_cls):
-    with pytest.raises(NotImplementedError, match="Phase 6c"):
-        validator_cls().check(context=None, schema=None)

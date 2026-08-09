@@ -17,10 +17,34 @@ derived_stages:                 # names resolve via derived.STAGES; order matter
   - halo_properties
   - orbital_properties
   - star_formation_history
+  - host_environment              # must run before `environment` if you want
+                                   # HostIsIsolated/HostIsPaired copied through
   - environment
   - observability
   - dorcha_specific              # particle-tagging-derived fields; omit for
                                   # projects with no particle tagging
+
+# Every derived stage beyond halo_properties/orbital_properties needs at
+# least one explicit, project-specific modelling choice as a constructor
+# argument -- see each stage's docstring for *why* no default is picked
+# anywhere in the pipeline itself. Values below are illustrative, not
+# recommendations -- pick numbers appropriate to your project.
+stage_options:
+  star_formation_history:
+    time_bin_edges: [0.0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 13.5]  # Gyr lookback
+    quenched_ssfr_threshold: 1.0e-11   # 1/yr, absolute (not MS-relative)
+  host_environment:
+    isolation_radius_factor: 3.0        # x R200c_host
+    pairing_mass_ratio_min: 0.3         # companion mass >= 0.3x or <= 1/0.3x host
+    pairing_max_separation: 1.0         # same length units as the halo catalogue
+    completeness_mass_threshold: 1.0e8  # Msun (native units -- see EnvironmentStage)
+  environment:
+    mass_threshold: 1.0e8     # Msun (native units), neighbour-counting floor
+    aperture_radius: 5.0      # same length units as the halo catalogue
+  observability:
+    observer_pos: [50.0, 50.0, 50.0]   # box coordinates of the "mock Sun"
+  dorcha_specific:
+    reionisation_lookback_time: 13.0   # Gyr
 
 units:
   length: cMpc/h
