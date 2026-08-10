@@ -20,7 +20,13 @@ def _issues(report, check=None):
 # Mpeak >= M200c_z0
 # ---------------------------------------------------------------------------
 
-def test_mpeak_below_m200c_z0_is_an_error():
+def test_mpeak_below_m200c_z0_is_a_warning_not_an_error():
+    # Warning, not error: for SubFind-format catalogues, M200c_z0
+    # (epoch.halos["mass"], defaulting to the FOF Group table's
+    # spherical-overdensity Group_M_Crit200) and Mpeak (the tree's
+    # bound-subhalo SubhaloMass) can legitimately use different mass
+    # definitions -- Group mass including diffuse mass no bound subhalo
+    # owns is normal, not a data error. See HaloExtractStage's docstring.
     context = PipelineContext()
     context.columns["Satellites/HaloProperties/Mpeak"] = np.array([1e9])
     context.columns["Satellites/HaloProperties/M200c_z0"] = np.array([1e10])
@@ -28,7 +34,8 @@ def test_mpeak_below_m200c_z0_is_an_error():
     report = PhysicalValidator().check(context, schema=None)
     issues = _issues(report, "mpeak_below_m200c_z0")
     assert len(issues) == 1
-    assert issues[0].severity == "error"
+    assert issues[0].severity == "warning"
+    assert report.passed is True   # warnings alone don't fail a build
 
 
 def test_mpeak_at_or_above_m200c_z0_is_silent():

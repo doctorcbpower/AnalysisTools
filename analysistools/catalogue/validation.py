@@ -339,10 +339,11 @@ class IntegrityValidator(Validator):
 
 
 class PhysicalValidator(Validator):
-    """Mpeak >= M200c_z0; OrbitalApocentre >= OrbitalPericentre;
-    HeliocentricDistance > 0; CompletenessWeight >= 1; a backsplash
-    satellite has at least one recorded infall; total SFH-formed mass >=
-    StellarMass (warning only, not an error -- see below).
+    """Mpeak >= M200c_z0 (warning only -- see below); OrbitalApocentre >=
+    OrbitalPericentre; HeliocentricDistance > 0; CompletenessWeight >= 1;
+    a backsplash satellite has at least one recorded infall; total
+    SFH-formed mass >= StellarMass (warning only, not an error -- see
+    below).
 
     Two checks deliberately deviate from the one-line description
     originally sketched for this validator, for the same reason
@@ -411,11 +412,30 @@ class PhysicalValidator(Validator):
             mpeak, m200c_z0, valid = pair
             bad = valid & (mpeak < m200c_z0)
             if np.any(bad):
+                # Warning, not error: Mpeak (HaloPropertiesStage, walking
+                # the merger tree's bound-subhalo mass) and M200c_z0
+                # (HaloExtractStage, reading epoch.halos["mass"]) can
+                # legitimately use *different* mass definitions for
+                # SubFind-format catalogues -- epoch.halos defaults to
+                # the FOF Group table (Group_M_Crit200, a spherical-
+                # overdensity mass that includes diffuse mass never
+                # assigned to any bound subhalo), while the tree tracks
+                # SubhaloMass (bound-substructure mass only).
+                # Group_M_Crit200 > SubhaloMass for the same object at
+                # the same epoch is normal, not a violation -- see
+                # docs/phase6_remaining_work.md for the fuller writeup
+                # and HaloExtractStage's own docstring.
                 report.add(
-                    "error", "mpeak_below_m200c_z0",
+                    "warning", "mpeak_below_m200c_z0",
                     f"{int(np.count_nonzero(bad))} satellite(s) have "
-                    f"Mpeak < M200c_z0 -- the peak historical mass cannot "
-                    f"be below the present-day mass.",
+                    f"Mpeak < M200c_z0. If M200c_z0 comes from a "
+                    f"GADGET/Arepo-family catalogue's FOF Group table "
+                    f"(the epoch.halos default for SubFind) while Mpeak "
+                    f"comes from the tree's bound-subhalo mass, this can "
+                    f"be a legitimate mass-definition mismatch (Group "
+                    f"mass includes diffuse mass no bound subhalo owns) "
+                    f"rather than an actual data problem -- see "
+                    f"HaloExtractStage's docstring.",
                     field="Satellites/HaloProperties/Mpeak")
 
         pair = _pair("Satellites/HaloProperties/OrbitalApocentre",

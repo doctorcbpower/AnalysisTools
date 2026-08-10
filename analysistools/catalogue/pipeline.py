@@ -129,6 +129,30 @@ class HaloExtractStage(ExtractStage):
     (arguably WriteStage's job, Phase 6c) -- until then, construct the
     Epoch's HaloCatalogue with the comoving/little_h state you actually
     want written.
+
+    Group vs. Subhalo (GADGET/Arepo-family catalogues, e.g. SubFind):
+    ``epoch.halos`` defaults to the FOF *Group* table (``Group_M_Crit200``
+    etc -- a spherical-overdensity mass/radius that includes diffuse mass
+    no bound subhalo owns, and has no ``Vmax`` at all). A *satellite*'s
+    only sensible present-day mass/radius/Vmax is its own bound subhalo's
+    (``SubhaloMass``/``SubhaloHalfmassRad``/``SubhaloVmax``) -- the same
+    definition the merger tree's ``Mpeak`` already uses (mixing the two,
+    as this stage previously always did, is why
+    ``PhysicalValidator.mpeak_below_m200c_z0`` can fire on otherwise
+    correct data). When the catalogue has a subhalo table and a
+    ``GroupFirstSub`` column (SubFind's own group-to-primary-subhalo
+    pointer -- see ``HaloTools``'s ``centre_on_subhalo`` for the same
+    lookup used to re-centre position/velocity), ``Satellites/
+    HaloProperties/M200c_z0``/``R200c_z0``/``Vmax_z0`` and
+    ``Satellites/Identification/SubhaloID_z0`` are sourced from each
+    satellite's own primary subhalo instead of its Group row, and
+    ``Haloes/Vmax_host`` from the host's. ``Haloes/M200c``/``R200c``
+    (and ``Position``/``Velocity``, already covered by ``HaloTools``'s
+    own ``centre_on_subhalo=`` opt-in) deliberately stay Group-level --
+    those genuinely mean the group's own virial mass/radius, not a
+    per-object quantity. A satellite whose group has no valid primary
+    subhalo (``GroupFirstSub`` sentinel) gets NaN/-1 for these fields
+    rather than silently falling back to the (inconsistent) Group value.
     """
 
     name = "halo_extract"
@@ -152,6 +176,39 @@ class HaloExtractStage(ExtractStage):
         self.host_row = int(host_row)
         self.satellite_rows = np.asarray(satellite_rows, dtype=np.int64)
 
+    def _primary_subhalo_properties(self, halos):
+        """(mass, radius, vmax, subhalo_id, n_no_subhalo) arrays, one
+        entry per row of `halos` (the Group table), giving that group's
+        *primary subhalo*'s own mass/radius/vmax/id via ``GroupFirstSub``
+        -- NaN/-1 where the group has no valid one. `None` (all five) if
+        this catalogue has no subhalo table or no ``GroupFirstSub``
+        column (not every format/version has this split -- see this
+        class's docstring)."""
+        if not getattr(halos, "has_subhalos", False) \
+                or "GroupFirstSub" not in halos:
+            return None
+        subs = halos.subhalos
+        sub_mass = np.asarray(subs["mass"])
+        sub_radius = np.asarray(subs["radius"])
+        sub_vmax = _first_available_field(subs, self.VMAX_CANDIDATES)
+        sub_id = np.asarray(subs["halo_id"])
+
+        first_sub = np.asarray(halos["GroupFirstSub"]).astype(np.int64)
+        valid = (first_sub >= 0) & (first_sub < len(subs))
+
+        mass = np.full(len(halos), np.nan)
+        radius = np.full(len(halos), np.nan)
+        vmax = np.full(len(halos), np.nan) if sub_vmax is not None else None
+        subhalo_id = np.full(len(halos), -1, dtype=np.int64)
+
+        mass[valid] = sub_mass[first_sub[valid]]
+        radius[valid] = sub_radius[first_sub[valid]]
+        if sub_vmax is not None:
+            vmax[valid] = sub_vmax[first_sub[valid]]
+        subhalo_id[valid] = sub_id[first_sub[valid]]
+
+        return mass, radius, vmax, subhalo_id, int(np.count_nonzero(~valid))
+
     def run(self, context: PipelineContext) -> PipelineContext:
         halos = self.epoch.halos
         if halos is None:
@@ -173,31 +230,54 @@ class HaloExtractStage(ExtractStage):
         vel = np.asarray(halos["vel"]) if "vel" in halos else None
         vmax = _first_available_field(halos, self.VMAX_CANDIDATES)
 
+        subhalo_props = self._primary_subhalo_properties(halos)
+        if subhalo_props is not None:
+            sub_mass, sub_radius, sub_vmax, sub_id, n_no_subhalo = subhalo_props
+            if n_no_subhalo:
+                logger.warning(
+                    "%s: %d/%d groups in this catalogue have no valid "
+                    "primary subhalo (GroupFirstSub) -- any host/"
+                    "satellite among them gets NaN/-1 for subhalo-"
+                    "sourced fields (M200c_z0/R200c_z0/Vmax_z0/"
+                    "SubhaloID_z0/Vmax_host) rather than an inconsistent "
+                    "Group-table fallback.", self.name, n_no_subhalo,
+                    len(halos))
+        else:
+            sub_mass = sub_radius = sub_vmax = sub_id = None
+
         context.columns["Haloes/HostHaloID"] = np.asarray([halo_id[host]])
         context.columns["Haloes/M200c"] = np.asarray([mass[host]])
         context.columns["Haloes/R200c"] = np.asarray([radius[host]])
         context.columns["Haloes/Position"] = pos[[host]]
         if vel is not None:
             context.columns["Haloes/Velocity"] = vel[[host]]
-        if vmax is not None:
-            context.columns["Haloes/Vmax_host"] = vmax[[host]]
+        host_vmax = sub_vmax[host] if sub_vmax is not None \
+            else (vmax[host] if vmax is not None else None)
+        if host_vmax is not None and not np.isnan(host_vmax):
+            context.columns["Haloes/Vmax_host"] = np.asarray([host_vmax])
 
         context.columns["Satellites/_internal/halo_row"] = sats
         context.columns["Satellites/_internal/pos_z0"] = pos[sats]
         if vel is not None:
             context.columns["Satellites/_internal/vel_z0"] = vel[sats]
 
-        context.columns["Satellites/Identification/SubhaloID_z0"] = halo_id[sats]
+        context.columns["Satellites/Identification/SubhaloID_z0"] = \
+            sub_id[sats] if sub_id is not None else halo_id[sats]
         context.columns["Satellites/Identification/Snapshot"] = np.full(
             sats.size, snapnum, dtype=np.int32)
-        context.columns["Satellites/HaloProperties/M200c_z0"] = mass[sats]
-        context.columns["Satellites/HaloProperties/R200c_z0"] = radius[sats]
-        if vmax is not None:
-            context.columns["Satellites/HaloProperties/Vmax_z0"] = vmax[sats]
+        context.columns["Satellites/HaloProperties/M200c_z0"] = \
+            sub_mass[sats] if sub_mass is not None else mass[sats]
+        context.columns["Satellites/HaloProperties/R200c_z0"] = \
+            sub_radius[sats] if sub_radius is not None else radius[sats]
+        sat_vmax = sub_vmax[sats] if sub_vmax is not None \
+            else (vmax[sats] if vmax is not None else None)
+        if sat_vmax is not None:
+            context.columns["Satellites/HaloProperties/Vmax_z0"] = sat_vmax
         else:
             logger.warning(
                 "%s: no Vmax field found under any of %s for this %s "
-                "catalogue; Satellites/HaloProperties/Vmax_z0 omitted.",
+                "catalogue (Group or Subhalo table); Satellites/"
+                "HaloProperties/Vmax_z0 omitted.",
                 self.name, self.VMAX_CANDIDATES, halos.fileformat)
 
         # native comoving/little_h state of every Haloes/* and *_z0 field

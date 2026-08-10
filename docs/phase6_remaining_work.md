@@ -367,6 +367,51 @@ condensed index.
   deliberately non-identity `idx`, which would have raised `IndexError`
   or written wrong values under the old code).
 
+- **`mpeak_below_m200c_z0` false positive on real SubFind data — Group-
+  vs-Subhalo mass-definition mismatch, fixed both ways**: running the
+  end-to-end pipeline against a real Dorcha SubFind-HBT catalogue raised
+  a build-blocking `mpeak_below_m200c_z0` validation error. Root cause:
+  `epoch.halos` defaults to the **Group** (FOF) table, so
+  `HaloExtractStage` was reading `Satellites/HaloProperties/M200c_z0`
+  from `Group_M_Crit200` (a spherical-overdensity mass that includes
+  diffuse mass never assigned to any bound subhalo), while
+  `Satellites/HaloProperties/Mpeak` comes from the merger tree walking
+  **bound-subhalo** mass (`SubhaloMass`). `Group_M_Crit200 >
+  SubhaloMass` for the same object at the same epoch is normal, not a
+  data error — the two fields were never using the same mass
+  definition. Fixed on both fronts the user asked for:
+  1. **Root cause**: `HaloExtractStage._primary_subhalo_properties()`
+     now looks up each Group row's primary subhalo via `GroupFirstSub`
+     (the same SubFind pointer already used by `HaloTools`'s
+     `centre_on_subhalo`) and sources `Satellites/HaloProperties/
+     M200c_z0`/`R200c_z0`/`Vmax_z0`, `Satellites/Identification/
+     SubhaloID_z0`, and `Haloes/Vmax_host` from the **Subhalo** table
+     when one exists — matching Mpeak's own bound-subhalo mass
+     definition. A Group with no valid `GroupFirstSub` gets NaN/-1 for
+     these fields (plus a warning naming the count), not a silent
+     fallback to the Group value that would reintroduce the same
+     inconsistency. `Haloes/M200c`/`R200c`/`Position`/`Velocity` and all
+     `Satellites/_internal/*` fields (which back `particles_in_halo`/
+     `galaxies_in_halo`/`track_of`) deliberately stay Group-level —
+     redefining what those mean has much larger blast radius (`Epoch`'s
+     core unified-interface methods hardcode the Group table with no
+     table-selection parameter) and was out of scope for this fix.
+     Catalogues without a Subhalo table, or without `GroupFirstSub`,
+     behave exactly as before. Covered by
+     `tests/test_catalogue_pipeline_halo_extract_subhalo.py` (hand-built
+     fake Group/Subhalo catalogue, no bundled SubFind fixture with a
+     real `GroupFirstSub` column exists).
+  2. **Safety margin**: `PhysicalValidator`'s `mpeak_below_m200c_z0`
+     check is downgraded from an error to a warning, since even after
+     the fix the mismatch can still legitimately arise from mass
+     definitions in other supported catalogue formats.
+  - Deferred, not yet investigated: `MergerTree.from_halo()`'s
+    `object_type="Group"` path appears to pass a Group-table row index
+    directly as a `SubhaloNr` when it internally resolves to
+    `object_type="Subhalo"` — worth checking separately, since it may
+    affect tree lookups for Group-indexed host/satellite rows. Not
+    confirmed as an actual bug yet.
+
 None of the deferred-field items above block using the pipeline today —
 they can be picked up independently whenever the relevant modelling
 decision or infrastructure (particle tagging, cosmic-web classifier,
