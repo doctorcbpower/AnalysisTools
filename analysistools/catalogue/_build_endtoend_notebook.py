@@ -184,7 +184,10 @@ config = {
     ],
     "stage_options": {
         "star_formation_history": {
-            "time_bin_edges": list(np.linspace(0.0, 13.5, 14)),  # Gyr lookback
+            # yaml.safe_dump can't represent numpy scalars -- cast to
+            # plain Python float, not just list(...) (which still leaves
+            # each element an np.float64).
+            "time_bin_edges": [float(t) for t in np.linspace(0.0, 13.5, 14)],  # Gyr lookback
             "quenched_ssfr_threshold": 1.0e-11,  # 1/yr, absolute
         },
         "host_environment": {
