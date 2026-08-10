@@ -292,17 +292,17 @@ class CrossMatchStage(PipelineStage):
     to actually call it) are given, ``galaxy_backend.galaxy_properties()``
     is called once per satellite (post-sort, so results land in canonical
     row order already) and every field any satellite returned becomes a
-    ``Satellites/GalaxyProperties/<field>`` column, ``NaN`` for satellites
-    that didn't return that particular field -- matching the
-    ``GalaxyBackend`` protocol's "omit, don't fabricate" contract at the
-    per-satellite level, but an array output needs *some* fill value once
-    stacked across satellites, hence NaN here specifically. Skipped (with
-    a warning, not a crash) if ``galaxy_backend`` is given without
-    ``epoch``, or before ``HaloExtractStage`` has populated
-    ``Satellites/_internal/halo_row``. ``SharkGalaxyID`` (the foreign key
-    into the native SHARK table) isn't produced here -- neither backend
-    exposes the underlying galaxy's native ID through the
-    ``GalaxyBackend`` protocol currently.
+    column, ``NaN`` for satellites that didn't return that particular
+    field -- matching the ``GalaxyBackend`` protocol's "omit, don't
+    fabricate" contract at the per-satellite level, but an array output
+    needs *some* fill value once stacked across satellites, hence NaN
+    here specifically. Fields land under ``Satellites/GalaxyProperties/
+    <field>`` by default, *except* ``SharkGalaxyID`` (schema-declared
+    under ``Satellites/Identification``, since it's a foreign key/
+    identifier, not a physical galaxy property -- see
+    ``_GALAXY_FIELD_GROUP_OVERRIDES``). Skipped (with a warning, not a
+    crash) if ``galaxy_backend`` is given without ``epoch``, or before
+    ``HaloExtractStage`` has populated ``Satellites/_internal/halo_row``.
 
     Row-permutation convention: every ``context.columns`` key under
     ``'Satellites/'`` or ``'MergerTrees/'`` is treated as satellite-indexed
@@ -315,6 +315,16 @@ class CrossMatchStage(PipelineStage):
     inputs = ("Satellites/Identification/SubhaloID_z0", "Haloes/HostHaloID")
     outputs = ("Satellites/Identification/SatelliteID",
               "Satellites/Identification/HostHaloID")
+
+    #: GalaxyBackend field name -> schema group, for fields that don't
+    #: belong under the default Satellites/GalaxyProperties (schema.py's
+    #: own declared group is the source of truth; kept here as an
+    #: explicit override list, matching this codebase's preference for
+    #: explicit per-name dispatch over reflection, rather than requiring
+    #: every CrossMatchStage caller to supply a full CatalogueSchema).
+    _GALAXY_FIELD_GROUP_OVERRIDES = {
+        "SharkGalaxyID": "Satellites/Identification",
+    }
 
     def __init__(self, galaxy_backend=None, epoch=None):
         self.galaxy_backend = galaxy_backend
@@ -370,8 +380,9 @@ class CrossMatchStage(PipelineStage):
                     for i, props in enumerate(per_satellite):
                         if field in props:
                             values[i] = props[field]
-                    context.columns[
-                        f"Satellites/GalaxyProperties/{field}"] = values
+                    group = self._GALAXY_FIELD_GROUP_OVERRIDES.get(
+                        field, "Satellites/GalaxyProperties")
+                    context.columns[f"{group}/{field}"] = values
                 n_galaxy_matched = sum(1 for p in per_satellite if p)
                 if n_galaxy_matched == 0:
                     logger.warning(

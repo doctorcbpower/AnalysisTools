@@ -202,6 +202,48 @@ condensed index.
   `CrossMatchStage` also now warns explicitly whenever a `galaxy_backend`
   matches zero satellites, so this class of failure surfaces immediately
   instead of downstream.
+- **`CrossMatchStage` field-routing bug — now fixed**: every
+  `GalaxyBackend`-returned field was hardcoded under
+  `Satellites/GalaxyProperties/<field>`, but the schema declares
+  `SharkGalaxyID` under `Satellites/Identification` (it's a foreign key/
+  identifier, not a physical galaxy property) — found via
+  `QualityControlStage` rejecting a real build with an "undeclared
+  field" `SchemaValidator` error. Fixed with an explicit per-field group
+  override (`CrossMatchStage._GALAXY_FIELD_GROUP_OVERRIDES`).
+- **`SharkModel.sfh_bulge()`/`sfh_metals_bulge()` bulge-SFH bug — now
+  fixed**: SHARK tracks bulge growth as two separate history channels
+  (`bulges_diskins`/`bulges_mergers`, mirroring `GALAXY_FIELDS`'
+  `mstars_burst_diskinstabilities`/`mstars_burst_mergers` split), but
+  `SFH_FIELDS` only ever read `bulges_diskins`. Since `mstars_bulge`
+  (used for `StellarMass`) is already both channels' sum, any galaxy
+  with real merger-driven bulge growth had its SFH-integrated formed
+  mass come out *below* its current stellar mass — found via
+  `PhysicalValidator`'s `stellar_mass_exceeds_formed_mass` check
+  rejecting a real build, confirmed against a real SHARK output file's
+  actual HDF5 group layout (`bulges_mergers` present, unread). Fixed by
+  adding `sfh_bulge_mergers`/`sfh_metals_bulge_mergers` to `SFH_FIELDS`
+  and summing both channels in `sfh_bulge()`/`sfh_metals_bulge()`.
+- **SubFind-format `epoch.halos["mass"]` is Group-level, not
+  Subhalo-level — a real footgun, not a bug**: `HaloCatalogue` loads
+  the FOF *Group* table into `epoch.halos` by default for SubFind
+  catalogues (`Group_M_Crit200`, no `Vmax` field — hence the "no Vmax
+  field found" warning every SubFind run logs); the *Subhalo* table
+  (`SubhaloMass`, has `Vmax`) is only reachable via `epoch.halos.
+  subhalos`, a separate `Dataset`. The demo notebook's placeholder host/
+  satellite selection (`_build_endtoend_notebook.py`, "N most massive
+  halos") picks the next most massive *Group* rows and calls them
+  "satellites" -- which are actually unrelated FOF groups elsewhere in
+  the box, not real subhalos of the chosen host. Comparing `Mpeak`
+  (tree-tracked `SubhaloMass`) against `M200c_z0` (an unrelated group's
+  `Group_M_Crit200`) for these fake "satellites" is why
+  `PhysicalValidator`'s `mpeak_below_m200c_z0` check fires on a real
+  run. The notebook already documents this selection as a placeholder
+  ("has no physical meaning ... replace before using for anything
+  beyond exercising the pipeline") -- real satellite selection for
+  SubFind-HBT projects needs genuine subhalo membership (e.g.
+  `epoch.halos.subhalos` filtered to a host's own `GroupNr`/
+  `hostHaloID`), not attempted here since it's a project-specific
+  decision `HaloExtractStage` deliberately never guesses.
 - **`SatelliteID` stability**: assigned per-build by
   `_concatenate_contexts` (globally, across every `HostJob`), not
   guaranteed stable across independent catalogue rebuilds (e.g. if the

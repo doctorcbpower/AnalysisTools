@@ -343,6 +343,33 @@ def test_galaxy_properties_missing_fields_become_nan(
 
 
 @needs_data
+def test_shark_galaxy_id_routed_to_identification_group_not_galaxy_properties(
+        epoch, host_and_satellite_rows):
+    # SharkGalaxyID is schema-declared under Satellites/Identification
+    # (it's a foreign key/identifier, not a physical galaxy property) --
+    # CrossMatchStage must not dump it under Satellites/GalaxyProperties
+    # like every other backend-returned field, or a QualityControlStage
+    # run with the real schema fails with an "undeclared field" error.
+    host_row, satellite_rows = host_and_satellite_rows
+    props_by_row = {row: {"StellarMass": 1e9, "SharkGalaxyID": 42 + row}
+                    for row in satellite_rows}
+    backend = _FakeGalaxyBackend(props_by_row)
+
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+    result = CrossMatchStage(galaxy_backend=backend, epoch=epoch).run(context)
+
+    assert "Satellites/Identification/SharkGalaxyID" in result.columns
+    assert "Satellites/GalaxyProperties/SharkGalaxyID" not in result.columns
+    assert "Satellites/GalaxyProperties/StellarMass" in result.columns
+
+    halo_rows = result.columns["Satellites/_internal/halo_row"]
+    shark_id = result.columns["Satellites/Identification/SharkGalaxyID"]
+    for row, sid in zip(halo_rows, shark_id):
+        assert sid == pytest.approx(42 + int(row))
+
+
+@needs_data
 def test_zero_galaxy_matches_warns_clearly(
         epoch, host_and_satellite_rows, caplog):
     # every satellite's galaxy_properties() returns {} -- no

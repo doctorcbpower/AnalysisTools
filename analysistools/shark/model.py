@@ -102,11 +102,21 @@ GALAXY_FIELDS: Dict[str, Tuple[str, str]] = {
 #: Maps logical name -> (hdf5_group, dataset).
 #: delta_t and lbt_mean are snapshot-level scalars, not per-galaxy arrays;
 #: they are stored separately in _sfh_meta rather than _cache.
+#:
+#: SHARK tracks bulge growth as two separate channels -- disk-instability
+#: driven (bulges_diskins) and merger-driven (bulges_mergers) -- mirroring
+#: GALAXY_FIELDS' own mstars_burst_diskinstabilities/mstars_burst_mergers
+#: split. mstars_bulge (used for StellarMass elsewhere) is already their
+#: sum, so the *_diskins-only entries below are individually incomplete;
+#: sfh_bulge()/sfh_metals_bulge() sum both channels -- use those, not
+#: these raw keys directly, unless you specifically want one channel.
 SFH_FIELDS: Dict[str, Tuple[str, str]] = {
-    "sfh_disk":          ("disks", "star_formation_rate_histories"),
-    "sfh_bulge":         ("bulges_diskins", "star_formation_rate_histories"),
-    "sfh_metals_disk":   ("disks", "metallicity_histories"),
-    "sfh_metals_bulge":  ("bulges_diskins", "metallicity_histories"),
+    "sfh_disk":                ("disks", "star_formation_rate_histories"),
+    "sfh_bulge_diskins":       ("bulges_diskins", "star_formation_rate_histories"),
+    "sfh_bulge_mergers":       ("bulges_mergers", "star_formation_rate_histories"),
+    "sfh_metals_disk":         ("disks", "metallicity_histories"),
+    "sfh_metals_bulge_diskins": ("bulges_diskins", "metallicity_histories"),
+    "sfh_metals_bulge_mergers": ("bulges_mergers", "metallicity_histories"),
 }
 
 # ---------------------------------------------------------------------------
@@ -376,16 +386,26 @@ class SharkModel:
         return self.get("sfh_disk", redshift)
 
     def sfh_bulge(self, redshift: float) -> np.ndarray:
-        """Bulge (burst) SFH array  [M_sun / yr], shape (n_galaxies, n_sfh_bins)."""
-        return self.get("sfh_bulge", redshift)
+        """Bulge SFH array  [M_sun / yr], shape (n_galaxies, n_sfh_bins) --
+        sum of the disk-instability-driven and merger-driven channels
+        (see SFH_FIELDS' docstring for why both are needed: mstars_bulge,
+        used for StellarMass elsewhere, is already their sum, so using
+        only bulges_diskins here would make the SFH-integrated formed
+        mass look smaller than the current bulge mass for any galaxy
+        with real merger-driven bulge growth)."""
+        return (self.get("sfh_bulge_diskins", redshift)
+               + self.get("sfh_bulge_mergers", redshift))
 
     def sfh_metals_disk(self, redshift: float) -> np.ndarray:
         """Disk stellar metallicity history  [M_sun], shape (n_galaxies, n_sfh_bins)."""
         return self.get("sfh_metals_disk", redshift)
 
     def sfh_metals_bulge(self, redshift: float) -> np.ndarray:
-        """Bulge stellar metallicity history  [M_sun], shape (n_galaxies, n_sfh_bins)."""
-        return self.get("sfh_metals_bulge", redshift)
+        """Bulge stellar metal mass history  [M_sun], shape (n_galaxies,
+        n_sfh_bins) -- sum of the disk-instability-driven and
+        merger-driven channels, see ``sfh_bulge``."""
+        return (self.get("sfh_metals_bulge_diskins", redshift)
+               + self.get("sfh_metals_bulge_mergers", redshift))
 
     def Z_disk_history(self, redshift: float) -> np.ndarray:
         """
