@@ -238,6 +238,25 @@ condensed index.
   `_build_endtoend_notebook.py`'s demo config now derives
   `time_bin_edges`' upper bound from `shark_model.age_at_z(0.0)` (plus
   a small safety margin) instead of a hardcoded guess.
+- **`SharkModel`'s SFH arrays weren't row-aligned with `galaxies.hdf5`
+  — now fixed, the real third cause**: `stellar_mass_exceeds_formed_mass`
+  still fired after both fixes above. Root cause: `star_formation_
+  histories.hdf5` commonly covers only a *subset* of the galaxies in
+  `galaxies.hdf5` for the same snapshot (confirmed on a real run: one
+  subvolume had 124 SFH-file rows against >28,000 `galaxies.hdf5` rows)
+  — `sfh_disk()[row]`/`sfh_bulge()[row]` either raised `IndexError`
+  outright, or (for smaller `row` values) silently returned a
+  *different* galaxy's SFH entirely, since the two files' row `i` are
+  not the same galaxy. Both files carry their own `galaxies/id_galaxy`;
+  `SharkModel._load_sfh_snapshot()` now joins on that ID
+  (`_sfh_row_map`/`_reindex_sfh_array`) and reindexes every SFH array
+  onto `galaxies.hdf5`'s own row order (NaN for a galaxy absent from
+  the SFH file — already handled correctly downstream, since
+  `StarFormationHistoryStage`/`PhysicalValidator` already treat an
+  all-NaN SFH row as "not computed", the same as a `None` return). If
+  `id_galaxy` is missing from either file (older SHARK output), every
+  SFH field is left explicitly unavailable rather than risk silently
+  mismatched rows.
 - **SubFind-format `epoch.halos["mass"]` is Group-level, not
   Subhalo-level — a real footgun, not a bug**: `HaloCatalogue` loads
   the FOF *Group* table into `epoch.halos` by default for SubFind

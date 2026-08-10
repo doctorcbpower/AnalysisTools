@@ -557,6 +557,23 @@ class SharkModel:
 
         Fields absent from the HDF5 file are stored as None and will raise
         a clear AttributeError on access.
+
+        **Row alignment**: ``star_formation_histories.hdf5`` commonly
+        covers only a *subset* of the galaxies in ``galaxies.hdf5`` for
+        the same snapshot (e.g. centrals only) — its arrays' row `i` is
+        *not* the same galaxy as ``galaxies.hdf5``'s row `i`. Confirmed on
+        a real run: one subvolume had 124 SFH-file rows against >28,000
+        rows in the corresponding galaxies.hdf5, and naively indexing the
+        SFH array with a galaxies.hdf5 row either raised ``IndexError``
+        or (for smaller indices) silently returned a *different* galaxy's
+        SFH entirely. Both files carry a ``galaxies/id_galaxy`` dataset;
+        every SFH array here is reindexed onto ``galaxies.hdf5``'s own row
+        order via that ID (NaN rows for galaxies absent from the SFH
+        file), so ``model.sfh_disk(z)[row]`` uses the same `row`
+        convention as every ``GALAXY_FIELDS`` accessor. If either file is
+        missing ``id_galaxy`` (older SHARK output), there is no safe way
+        to establish this correspondence -- every SFH field is left
+        unavailable (``None``) rather than risk silently mismatched rows.
         """
         first_subvol = sorted(self.subvols)[0]
 
@@ -568,8 +585,23 @@ class SharkModel:
                 "lbt_mean": f["lbt_mean"][()],
             }
             available = set(f.keys())
+            sfh_has_id_galaxy = "galaxies" in f and "id_galaxy" in f["galaxies"]
 
-        meta_stored = True
+        row_map = None
+        if sfh_has_id_galaxy:
+            row_map = self._sfh_row_map(snapshot)
+        if row_map is None:
+            print(
+                f"  [{self.label}] snapshot {snapshot}: could not "
+                f"establish a galaxies.hdf5 <-> star_formation_histories"
+                f".hdf5 row correspondence (missing/unreadable "
+                f"'galaxies/id_galaxy' in one or both files) -- every SFH "
+                f"field will be unavailable rather than risk silently "
+                f"mismatched rows."
+            )
+            for logical in SFH_FIELDS:
+                self._cache[(snapshot, logical)] = None
+            return
 
         for logical, (grp, ds) in SFH_FIELDS.items():
             # No galaxies/components stored in this SFH file
@@ -585,7 +617,7 @@ class SharkModel:
                 arrays, _, _ = common.read_sfh(
                     self.model_dir, snapshot, {grp: ds}, self.subvols
                 )
-                self._cache[(snapshot, logical)] = arrays[0]
+                raw = arrays[0]
             except (KeyError, OSError) as exc:
                 print(
                     f"  [{self.label}] snapshot {snapshot}: "
@@ -596,8 +628,46 @@ class SharkModel:
                 self._cache[(snapshot, logical)] = None
                 continue
 
-            # arrays is a length-1 list since we requested one field
-            self._cache[(snapshot, logical)] = arrays[0]
+            self._cache[(snapshot, logical)] = self._reindex_sfh_array(
+                raw, row_map)
+
+    def _sfh_row_map(self, snapshot: int) -> Optional[np.ndarray]:
+        """``galaxies.hdf5`` row -> ``star_formation_histories.hdf5`` row,
+        joined via each file's own ``galaxies/id_galaxy``. ``-1`` for a
+        galaxy with no SFH entry. ``None`` if either side's ID array
+        couldn't be read (caller then disables SFH entirely for this
+        snapshot -- see ``_load_sfh_snapshot``)."""
+        try:
+            sfh_ids_list, _, _ = common.read_sfh(
+                self.model_dir, snapshot, {"galaxies": "id_galaxy"},
+                self.subvols)
+            full_ids_list = common.read_data(
+                self.model_dir, snapshot, {"galaxies": ("id_galaxy",)},
+                self.subvols, include_h0_volh=False)
+        except (KeyError, OSError) as exc:
+            print(f"  [{self.label}] snapshot {snapshot}: could not read "
+                 f"id_galaxy for SFH row mapping: {exc}.")
+            return None
+        if not sfh_ids_list or not full_ids_list:
+            return None
+
+        sfh_ids = np.asarray(sfh_ids_list[0])
+        full_ids = np.asarray(full_ids_list[0])
+        id_to_sfh_row = {int(gid): i for i, gid in enumerate(sfh_ids)}
+        return np.fromiter(
+            (id_to_sfh_row.get(int(gid), -1) for gid in full_ids),
+            dtype=np.int64, count=len(full_ids))
+
+    @staticmethod
+    def _reindex_sfh_array(raw: np.ndarray, row_map: np.ndarray) -> np.ndarray:
+        """Reindex an (n_sfh_galaxies, n_bins) array onto
+        (len(row_map), n_bins) using `row_map` (see `_sfh_row_map`), NaN
+        for entries with no corresponding SFH row."""
+        n_bins = raw.shape[1] if raw.ndim > 1 else 1
+        out = np.full((len(row_map),) + raw.shape[1:], np.nan)
+        valid = row_map >= 0
+        out[valid] = raw[row_map[valid]]
+        return out
 
 
 # ---------------------------------------------------------------------------
