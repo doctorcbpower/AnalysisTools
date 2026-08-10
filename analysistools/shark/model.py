@@ -369,7 +369,18 @@ class SharkModel:
         Keys
         ----
         ``delta_t``  : ndarray, shape (n_sfh_bins,)
-            Width of each SFH time bin in Myr.
+            Width of each SFH time bin. Returned exactly as stored, no
+            unit conversion applied here. Confirmed (against a real
+            Dorcha SHARK run) to be in **Gyr**, the same unit as
+            ``lbt_mean`` -- *not* Myr as an earlier version of this
+            docstring (and of ``backends.SharkGalaxyBackend.
+            star_formation_history()``, which used to divide by 1e3
+            expecting a Myr->Gyr conversion) assumed without empirical
+            verification. If your SHARK output genuinely uses a
+            different unit, ``star_formation_history()``'s own sanity
+            check (comparing ``delta_t``'s sum against ``lbt_mean``'s
+            span) will warn rather than silently mis-scale every
+            formed-mass integral again.
         ``lbt_mean`` : ndarray, shape (n_sfh_bins,)
             Mean lookback time of each bin in Gyr.
 

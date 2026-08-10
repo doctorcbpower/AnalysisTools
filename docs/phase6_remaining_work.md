@@ -257,6 +257,24 @@ condensed index.
   `id_galaxy` is missing from either file (older SHARK output), every
   SFH field is left explicitly unavailable rather than risk silently
   mismatched rows.
+- **`SharkModel.get_sfh_meta()`'s `delta_t` was wrongly assumed to be
+  Myr — now fixed, the real fourth cause**: `stellar_mass_exceeds_
+  formed_mass` *still* fired after all three fixes above (for a
+  different set of satellites this time, ratio ~3.7e5 rather than the
+  earlier ~6e15 — the row-misalignment fix above was clearly the
+  dominant effect). Root cause, confirmed via a user-run diagnostic
+  against real data: `delta_t` is actually stored in **Gyr**, the same
+  unit as `lbt_mean` (consecutive `lbt_mean` bin-centre spacing matched
+  `delta_t`'s own value almost exactly) — not Myr, an assumption in
+  `SharkGalaxyBackend.star_formation_history()`'s `/ 1.0e3` "Myr->Gyr"
+  conversion that was never empirically verified (the same pattern as
+  the `sfh_bulge()` docstring's wrong "[Msun/yr]" label found earlier).
+  That conversion made every native SFH bin 1000x too narrow, silently
+  understating every formed-mass integral by the same factor. Fixed by
+  removing the conversion (`delta_t` used as-is) and adding a sanity
+  check (`delta_t`'s sum vs. `lbt_mean`'s span, warns if inconsistent by
+  more than 10x) so a genuinely different SHARK version's units would be
+  caught immediately instead of silently reproducing this bug again.
 - **SubFind-format `epoch.halos["mass"]` is Group-level, not
   Subhalo-level — a real footgun, not a bug**: `HaloCatalogue` loads
   the FOF *Group* table into `epoch.halos` by default for SubFind

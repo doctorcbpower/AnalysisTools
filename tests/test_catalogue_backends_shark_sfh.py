@@ -88,10 +88,13 @@ def test_rebin_does_not_warn_for_negligible_loss(caplog):
 # ---------------------------------------------------------------------------
 
 class _FakeModel:
-    def __init__(self, sfh_disk, sfh_bulge, delta_t_myr, lbt_mean_gyr):
+    def __init__(self, sfh_disk, sfh_bulge, delta_t_gyr, lbt_mean_gyr):
+        # delta_t is in the *same* unit as lbt_mean (Gyr) -- confirmed
+        # against a real SHARK run, see backends.py's own comment on
+        # this. Was wrongly assumed to be Myr (needing /1e3) previously.
         self._sfh_disk = np.asarray(sfh_disk, dtype=float)
         self._sfh_bulge = np.asarray(sfh_bulge, dtype=float)
-        self._meta = {"delta_t": np.asarray(delta_t_myr, dtype=float),
+        self._meta = {"delta_t": np.asarray(delta_t_gyr, dtype=float),
                      "lbt_mean": np.asarray(lbt_mean_gyr, dtype=float)}
 
     def sfh_disk(self, z):
@@ -150,7 +153,7 @@ def test_returns_none_when_file_backed_catalogue():
 
 
 def test_returns_none_when_epoch_has_no_redshift():
-    model = _FakeModel([[1.0]], [[0.0]], [1000.0], [0.5])
+    model = _FakeModel([[1.0]], [[0.0]], [1.0], [0.5])
     matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[0])
     epoch = _FakeEpoch(matched)
     epoch.redshift = None
@@ -162,7 +165,7 @@ def test_returns_none_when_epoch_has_no_redshift():
 def test_disk_plus_bulge_summed_and_identity_rebin():
     # one native bin covering the full grid exactly [0, 1] Gyr
     model = _FakeModel(sfh_disk=[[5.0]], sfh_bulge=[[1.0]],
-                       delta_t_myr=[1000.0], lbt_mean_gyr=[0.5])
+                       delta_t_gyr=[1.0], lbt_mean_gyr=[0.5])
     matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[0])
     epoch = _FakeEpoch(matched, redshift=0.0)
 
@@ -173,7 +176,7 @@ def test_disk_plus_bulge_summed_and_identity_rebin():
 
 def test_two_native_bins_matching_output_grid_exactly():
     model = _FakeModel(sfh_disk=[[5.0, 10.0]], sfh_bulge=[[1.0, 2.0]],
-                       delta_t_myr=[500.0, 500.0], lbt_mean_gyr=[0.25, 0.75])
+                       delta_t_gyr=[0.5, 0.5], lbt_mean_gyr=[0.25, 0.75])
     matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[0])
     epoch = _FakeEpoch(matched, redshift=0.0)
 
@@ -189,7 +192,7 @@ def test_uses_correct_row_via_index_into_full_model_table():
     disk[3] = 7.0
     bulge = np.zeros((4, 1))
     model = _FakeModel(sfh_disk=disk, sfh_bulge=bulge,
-                       delta_t_myr=[1000.0], lbt_mean_gyr=[0.5])
+                       delta_t_gyr=[1.0], lbt_mean_gyr=[0.5])
     matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[3])
     epoch = _FakeEpoch(matched, redshift=0.0)
 
@@ -198,11 +201,55 @@ def test_uses_correct_row_via_index_into_full_model_table():
     np.testing.assert_allclose(result, [7.0])
 
 
+def test_delta_t_myr_instead_of_gyr_triggers_units_warning(caplog):
+    # regression test for the real bug: if delta_t genuinely were Myr
+    # (1000x smaller than the Gyr this code now assumes), the mismatch
+    # against lbt_mean's span must be flagged, not silently miscomputed
+    # again the way the old /1e3 assumption was.
+    model = _FakeModel(sfh_disk=[[5.0, 10.0]], sfh_bulge=[[1.0, 2.0]],
+                       delta_t_gyr=[0.0005, 0.0005],  # i.e. 0.5 Myr, mislabelled
+                       lbt_mean_gyr=[0.25, 0.75])
+    matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[0])
+    epoch = _FakeEpoch(matched, redshift=0.0)
+
+    with caplog.at_level("WARNING"):
+        SharkGalaxyBackend().star_formation_history(
+            epoch, halo_row=0, time_bin_edges=[0.0, 0.5, 1.0])
+
+    assert any("delta_t" in r.message and "may not be in Gyr" in r.message
+              for r in caplog.records)
+
+
+def test_consistent_delta_t_does_not_warn(caplog):
+    model = _FakeModel(sfh_disk=[[5.0, 10.0]], sfh_bulge=[[1.0, 2.0]],
+                       delta_t_gyr=[0.5, 0.5], lbt_mean_gyr=[0.25, 0.75])
+    matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[0])
+    epoch = _FakeEpoch(matched, redshift=0.0)
+
+    with caplog.at_level("WARNING"):
+        SharkGalaxyBackend().star_formation_history(
+            epoch, halo_row=0, time_bin_edges=[0.0, 0.5, 1.0])
+
+    assert not any("may not be in Gyr" in r.message for r in caplog.records)
+
+
+def test_single_native_bin_skips_units_sanity_check():
+    # len(lbt_mean) == 1 -> no span to compare against, must not crash
+    model = _FakeModel(sfh_disk=[[5.0]], sfh_bulge=[[1.0]],
+                       delta_t_gyr=[1.0], lbt_mean_gyr=[0.5])
+    matched = _FakeGalaxyView({"mass": [1e9]}, model=model, index=[0])
+    epoch = _FakeEpoch(matched, redshift=0.0)
+
+    result = SharkGalaxyBackend().star_formation_history(
+        epoch, halo_row=0, time_bin_edges=[0.0, 1.0])
+    np.testing.assert_allclose(result, [6.0])
+
+
 def test_picks_most_massive_matched_galaxy_as_central():
     disk = np.array([[1.0], [9.0]])
     bulge = np.zeros((2, 1))
     model = _FakeModel(sfh_disk=disk, sfh_bulge=bulge,
-                       delta_t_myr=[1000.0], lbt_mean_gyr=[0.5])
+                       delta_t_gyr=[1.0], lbt_mean_gyr=[0.5])
     matched = _FakeGalaxyView({"mass": [1e9, 5e9]}, model=model,
                               index=[0, 1])
     epoch = _FakeEpoch(matched, redshift=0.0)

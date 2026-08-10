@@ -434,7 +434,17 @@ class SharkGalaxyBackend:
 
         native_sfr = sfh_disk + sfh_bulge
         lbt_mean = np.asarray(sfh_meta["lbt_mean"], dtype=float)      # Gyr
-        delta_t = np.asarray(sfh_meta["delta_t"], dtype=float) / 1.0e3  # Myr -> Gyr
+        # delta_t: confirmed, against a real Dorcha SHARK run, to already
+        # be in Gyr -- the *same* unit as lbt_mean, not Myr (an earlier,
+        # never-empirically-verified assumption here divided it by 1e3
+        # expecting a Myr->Gyr conversion, making every bin 1000x too
+        # narrow and silently understating every formed-mass integral by
+        # the same factor -- caught via PhysicalValidator's
+        # stellar_mass_exceeds_formed_mass check against real data:
+        # consecutive lbt_mean bin centres are spaced by exactly delta_t,
+        # not delta_t/1000). Used as-is now; see the sanity check below
+        # for a SHARK output where that's genuinely not true.
+        delta_t = np.asarray(sfh_meta["delta_t"], dtype=float)
 
         # Sort by ascending lookback time -- SHARK's own storage order
         # isn't verified against real data anywhere in this codebase, so
@@ -443,6 +453,25 @@ class SharkGalaxyBackend:
         order = np.argsort(lbt_mean)
         lbt_mean, delta_t, native_sfr = \
             lbt_mean[order], delta_t[order], native_sfr[order]
+
+        if len(lbt_mean) > 1:
+            span_from_centres = float(lbt_mean[-1] - lbt_mean[0])
+            span_from_widths = float(np.sum(delta_t))
+            if span_from_widths > 0 and not (
+                    0.1 < span_from_centres / span_from_widths < 10.0):
+                logger.warning(
+                    "SharkGalaxyBackend.star_formation_history(): SFH "
+                    "bin widths (delta_t, sum=%.3g) are inconsistent "
+                    "with the lookback-time span implied by bin centres "
+                    "(lbt_mean, range=%.3g) by more than 10x -- delta_t "
+                    "may not be in Gyr (the same unit as lbt_mean) for "
+                    "this SHARK output, in which case every formed-mass "
+                    "integral computed from this SFH will be wrong by "
+                    "whatever factor separates them. Check "
+                    "SharkModel.get_sfh_meta's units against your own "
+                    "star_formation_histories.hdf5 before trusting SFH-"
+                    "derived fields.", span_from_widths, span_from_centres)
+
         native_edges = np.empty(len(lbt_mean) + 1)
         native_edges[:-1] = lbt_mean - delta_t / 2.0
         native_edges[-1] = lbt_mean[-1] + delta_t[-1] / 2.0
