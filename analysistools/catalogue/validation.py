@@ -342,7 +342,7 @@ class PhysicalValidator(Validator):
     """Mpeak >= M200c_z0; OrbitalApocentre >= OrbitalPericentre;
     HeliocentricDistance > 0; CompletenessWeight >= 1; a backsplash
     satellite has at least one recorded infall; total SFH-formed mass >=
-    StellarMass.
+    StellarMass (warning only, not an error -- see below).
 
     Two checks deliberately deviate from the one-line description
     originally sketched for this validator, for the same reason
@@ -363,10 +363,25 @@ class PhysicalValidator(Validator):
       loss/return (evolved stars return gas to the ISM), so an *exact*
       match would only hold for a population with zero mass loss --
       checking equality would flag every realistically-evolved galaxy.
-      Substituted: total mass formed (the SFH integral) must be >=
+      Substituted: total mass formed (the SFH integral) should be >=
       ``StellarMass`` (mass loss can only reduce today's stellar mass
-      below what was formed, never increase it), with a small numerical
-      tolerance for floating-point roundoff.
+      below what was formed in-situ, never increase it) -- a *warning*,
+      not an error (see below), since it is not actually a hard
+      invariant: ``StellarMass`` (e.g. ``mstars_disk``/``mstars_bulge``
+      from a SAM like SHARK) includes stars accreted *ex-situ* via
+      mergers, but a galaxy's own tracked SFH typically records only the
+      stars it formed *in-situ* -- a real central galaxy built mostly
+      through mergers can legitimately have StellarMass far exceeding
+      its own SFH integral with a near-empty recorded history (raw
+      ``sfh_disk``/``sfh_bulge`` genuinely ~0 for its full history) and
+      nothing wrong with the data. Confirmed against a real Dorcha
+      catalogue after ruling out three genuine bugs this check
+      previously caught (a bulge-SFH channel omission, a `time_bin_edges`
+      truncation, and a `delta_t` unit error, all now fixed elsewhere in
+      this codebase) -- once those were fixed, this specific relationship
+      still didn't hold for an otherwise clean, fully-consistent
+      (`type=0` central, matching mass fields, consistent time units)
+      galaxy, which is what downgraded this check from error to warning.
 
     Every check skips NaN/absent inputs rather than flagging them --
     "not computed" is a legitimate, documented state (see e.g.
@@ -477,18 +492,20 @@ class PhysicalValidator(Validator):
                     ratio = np.where(bad, stellar_mass / formed_mass, np.nan)
                 worst = int(np.nanargmax(ratio))
                 report.add(
-                    "error", "stellar_mass_exceeds_formed_mass",
+                    "warning", "stellar_mass_exceeds_formed_mass",
                     f"{int(np.count_nonzero(bad))} satellite(s) have "
                     f"StellarMass exceeding the total mass formed "
-                    f"(integral of SFH) -- current stellar mass can only "
-                    f"be less than or equal to formed mass (mass "
-                    f"loss/return), never greater. Worst case: row "
-                    f"{worst}, StellarMass={stellar_mass[worst]:.3e}, "
+                    f"(integral of SFH). Worst case: row {worst}, "
+                    f"StellarMass={stellar_mass[worst]:.3e}, "
                     f"formed_mass={formed_mass[worst]:.3e} (ratio "
-                    f"{ratio[worst]:.3e}) -- a ratio near a round power of "
+                    f"{ratio[worst]:.3e}). A ratio near a round power of "
                     f"ten (e.g. ~1e9/1e-9) usually means a units mismatch "
-                    f"(e.g. Msun/Gyr vs. Msun/yr) somewhere upstream, not "
-                    f"a genuine small mass-loss/binning residual.",
+                    f"(e.g. Msun/Gyr vs. Msun/yr) somewhere upstream -- "
+                    f"worth checking. A smaller/less clean ratio is often "
+                    f"legitimate: StellarMass can include mass accreted "
+                    f"*ex-situ* via mergers that isn't recorded in this "
+                    f"galaxy's own SFH (see this validator's class "
+                    f"docstring) rather than a genuine data problem.",
                     field="Satellites/GalaxyProperties/StellarMass")
 
         return report

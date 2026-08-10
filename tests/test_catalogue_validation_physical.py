@@ -165,13 +165,20 @@ def _sfh_context(sfh, stellar_mass, edges):
     return context
 
 
-def test_stellar_mass_exceeding_formed_mass_is_an_error():
+def test_stellar_mass_exceeding_formed_mass_is_a_warning_not_an_error():
     # SFR=1 Msun/yr for 1 Gyr -> formed mass = 1e9 Msun; claim 2e9 today.
+    # Warning, not error: StellarMass can legitimately exceed a galaxy's
+    # own in-situ SFH integral due to ex-situ/merger-accreted mass a SAM
+    # like SHARK doesn't record in the per-galaxy SFH -- see this
+    # validator's docstring for the real case that downgraded this from
+    # a hard error.
     context = _sfh_context(sfh=[[1.0]], stellar_mass=[2e9], edges=[0.0, 1.0])
 
     report = PhysicalValidator().check(context, schema=None)
     issues = _issues(report, "stellar_mass_exceeds_formed_mass")
     assert len(issues) == 1
+    assert issues[0].severity == "warning"
+    assert report.passed is True   # warnings alone don't fail a build
 
 
 def test_stellar_mass_exceeding_formed_mass_message_reports_worst_case_ratio():

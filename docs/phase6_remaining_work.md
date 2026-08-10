@@ -275,6 +275,24 @@ condensed index.
   check (`delta_t`'s sum vs. `lbt_mean`'s span, warns if inconsistent by
   more than 10x) so a genuinely different SHARK version's units would be
   caught immediately instead of silently reproducing this bug again.
+- **`stellar_mass_exceeds_formed_mass` downgraded from error to
+  warning — resolution, not a bug**: after all four fixes above, this
+  check *still* fired on a real run. A further diagnostic (matching
+  `mstars_disk`+`mstars_bulge` exactly, `type=0` central, consistent
+  `delta_t`/`lbt_mean` units, and genuinely near-zero *raw*
+  `sfh_disk`/`sfh_bulge` across the galaxy's full history) ruled out
+  every remaining bug hypothesis: the data is fully self-consistent.
+  The real explanation is a gap in the check's own assumption --
+  `StellarMass` (SHARK's `mstars_disk`/`mstars_bulge`) includes stars
+  accreted *ex-situ* via mergers, but a galaxy's own SFH array
+  typically records only stars it formed *in-situ*; a central galaxy
+  built mostly through mergers can legitimately have `StellarMass` far
+  exceed its own SFH integral with nothing wrong with the data. Per
+  user decision, downgraded from a build-blocking error to a warning
+  (still surfaces the ratio for spotting a *genuine* units bug at a
+  glance, just doesn't block a build for a legitimate merger-built
+  galaxy) -- see `PhysicalValidator`'s class docstring for the full
+  reasoning.
 - **SubFind-format `epoch.halos["mass"]` is Group-level, not
   Subhalo-level — a real footgun, not a bug**: `HaloCatalogue` loads
   the FOF *Group* table into `epoch.halos` by default for SubFind
