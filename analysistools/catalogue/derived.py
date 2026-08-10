@@ -401,7 +401,21 @@ class EnvironmentStage(PipelineStage):
     length/mass units the Epoch's ``HaloCatalogue`` was configured with
     (comoving/little_h), not necessarily schema.py's declared "Mpc^-3
     (comoving)"/"Mpc" -- unit reconciliation against the schema isn't
-    implemented anywhere in the pipeline yet.
+    implemented anywhere in the pipeline yet. **Mass specifically**:
+    ``little_h``/``comoving`` only ever control the "/h" and scale-factor
+    axes (see ``HaloTools``'s own docstring) -- for GADGET/Arepo-family
+    catalogue formats (SubFind, and conventionally AHF/VELOCIraptor,
+    per ``halo_tools.NATIVE_INCLUDES_LITTLE_H``), the underlying mass
+    *scale* itself is never normalised out of the code's native unit
+    (typically 1e10 Msun, GADGET's own ``UnitMass_in_g`` convention),
+    regardless of ``little_h``. So ``epoch.halos["mass"]`` for such a
+    catalogue is in units of 1e10 Msun(/h), not plain Msun -- a
+    ``mass_threshold`` intended as "1e8 Msun" needs to be passed as
+    ``1.0e-2`` (``1e8 / 1e10``), not ``1.0e8``, or every halo will
+    silently fail the threshold and this stage will find zero
+    neighbours for everything (see its own "no neighbours found"
+    warning below, which reports the actual catalogue's mass range
+    specifically so a unit mismatch like this is visible immediately).
 
     Deliberately **not** computed here, documented rather than guessed:
 
@@ -448,9 +462,9 @@ class EnvironmentStage(PipelineStage):
 
         mass = np.asarray(halos["mass"])
         pos = np.asarray(halos["pos"])
-        neighbour_mask = np.ones(len(mass), dtype=bool)
-        neighbour_mask[list(excluded)] = False
-        neighbour_mask &= mass >= self.mass_threshold
+        candidate_mask = np.ones(len(mass), dtype=bool)
+        candidate_mask[list(excluded)] = False
+        neighbour_mask = candidate_mask & (mass >= self.mass_threshold)
         neighbour_pos = pos[neighbour_mask]
 
         boxsize = self.epoch.boxsize
@@ -463,11 +477,21 @@ class EnvironmentStage(PipelineStage):
         volume = (4.0 / 3.0) * np.pi * self.aperture_radius ** 3
 
         if neighbour_pos.shape[0] == 0:
+            candidate_mass = mass[candidate_mask]
+            mass_range = (f"[{candidate_mass.min():.3e}, "
+                         f"{candidate_mass.max():.3e}]"
+                         if candidate_mass.size else "(no candidates at all)")
             logger.warning(
-                "%s: no neighbours found above mass_threshold=%.3e; "
-                "LocalNumberDensity=0 and "
+                "%s: no neighbours found above mass_threshold=%.3e "
+                "(candidate halo mass range in this catalogue: %s -- if "
+                "mass_threshold looks like it should be well within that "
+                "range but isn't, check you haven't mixed up units: e.g. "
+                "GADGET/Arepo-family catalogues (SubFind, conventionally "
+                "AHF/VELOCIraptor) store mass in units of 1e10 Msun(/h), "
+                "not plain Msun, regardless of the little_h setting -- "
+                "see this stage's docstring); LocalNumberDensity=0 and "
                 "DistanceToNearestMassiveNeighbour left NaN for every "
-                "satellite.", self.name, self.mass_threshold)
+                "satellite.", self.name, self.mass_threshold, mass_range)
             local_density[:] = 0.0
         else:
             for i in range(n):
@@ -542,7 +566,10 @@ class HostEnvironmentStage(PipelineStage):
 
     Units caveat (same as ``HaloExtractStage``): computed in whatever
     length/mass units the Epoch's ``HaloCatalogue`` was configured with,
-    not necessarily schema.py's declared units.
+    not necessarily schema.py's declared units. ``completeness_mass_
+    threshold`` in particular is easy to get wrong by a factor of 1e10
+    for GADGET/Arepo-family catalogues -- see ``EnvironmentStage``'s
+    docstring (``mass_threshold``) for the full explanation.
     """
 
     name = "host_environment"

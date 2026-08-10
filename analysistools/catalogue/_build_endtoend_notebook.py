@@ -207,10 +207,20 @@ config = {
             "isolation_radius_factor": 3.0,
             "pairing_mass_ratio_min": 0.3,
             "pairing_max_separation": 1.0,
-            "completeness_mass_threshold": 1.0e8,
+            # mass_threshold/completeness_mass_threshold are compared
+            # directly against epoch.halos["mass"], which for GADGET/
+            # Arepo-family catalogues (SubFind, and conventionally AHF/
+            # VELOCIraptor) is in units of 1e10 Msun(/h), NOT plain Msun,
+            # regardless of little_h -- see EnvironmentStage's docstring.
+            # 1.0e-2 here means "1e8 Msun" (1e8 / 1e10); if your halo
+            # catalogue's native mass unit is different (check its own
+            # docs), convert accordingly -- and if EnvironmentStage logs
+            # "no neighbours found", check the mass range it reports
+            # before assuming these numbers are right for your data.
+            "completeness_mass_threshold": 1.0e-2,
         },
         "environment": {
-            "mass_threshold": 1.0e8,
+            "mass_threshold": 1.0e-2,   # "1e8 Msun" -- see the comment above
             "aperture_radius": 5.0,
         },
         "observability": {

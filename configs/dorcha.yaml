@@ -37,15 +37,31 @@ derived_stages:                 # names resolve via derived.STAGES; order matter
 # recommendations -- pick numbers appropriate to your project.
 stage_options:
   star_formation_history:
+    # Upper edge MUST reach at least the age of the universe at z=0 for
+    # your cosmology -- 13.5 here is illustrative only and is *not*
+    # automatically enough (e.g. h=0.678/Om=0.308 gives ~13.80 Gyr).
+    # rebin_sfh() silently drops native SFH mass beyond this edge (it
+    # logs a warning when it does -- watch for it), which then makes
+    # StellarMass appear to exceed the SFH-integrated formed mass.
+    # Compute it properly, e.g. shark_model.age_at_z(0.0) + margin,
+    # rather than copying this number.
     time_bin_edges: [0.0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 13.5]  # Gyr lookback
     quenched_ssfr_threshold: 1.0e-11   # 1/yr, absolute (not MS-relative)
   host_environment:
     isolation_radius_factor: 3.0        # x R200c_host
     pairing_mass_ratio_min: 0.3         # companion mass >= 0.3x or <= 1/0.3x host
     pairing_max_separation: 1.0         # same length units as the halo catalogue
-    completeness_mass_threshold: 1.0e8  # Msun (native units -- see EnvironmentStage)
+    # Compared directly against epoch.halos["mass"], which for GADGET/
+    # Arepo-family catalogues (SubFind, and conventionally AHF/
+    # VELOCIraptor) is in units of 1e10 Msun(/h), NOT plain Msun,
+    # regardless of little_h -- see EnvironmentStage's docstring. This
+    # value (1.0e-2) means "1e8 Msun" (1e8 / 1e10); check your own halo
+    # catalogue's native mass unit before trusting it, and if
+    # EnvironmentStage/HostEnvironmentStage log "no neighbours found",
+    # check the mass range they report first.
+    completeness_mass_threshold: 1.0e-2
   environment:
-    mass_threshold: 1.0e8     # Msun (native units), neighbour-counting floor
+    mass_threshold: 1.0e-2    # "1e8 Msun" -- see the comment above
     aperture_radius: 5.0      # same length units as the halo catalogue
   observability:
     observer_pos: [50.0, 50.0, 50.0]   # box coordinates of the "mock Sun"

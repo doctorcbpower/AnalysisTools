@@ -259,6 +259,24 @@ condensed index.
   `epoch.halos.subhalos` filtered to a host's own `GroupNr`/
   `hostHaloID`), not attempted here since it's a project-specific
   decision `HaloExtractStage` deliberately never guesses.
+- **`mass_threshold`/`completeness_mass_threshold` unit mismatch — a
+  real footgun, docs/warnings improved**: `EnvironmentStage`/
+  `HostEnvironmentStage` compare these directly against
+  `epoch.halos["mass"]`, which for GADGET/Arepo-family catalogue
+  formats (SubFind, and conventionally AHF/VELOCIraptor) is in units of
+  **1e10 Msun(/h)**, not plain Msun -- `little_h`/`comoving` only ever
+  control the "/h" and scale-factor axes (`HaloTools`'s own docstring),
+  the underlying 1e10 scale is never normalised out anywhere in this
+  codebase. A `mass_threshold` intended as "1e8 Msun" needs to be passed
+  as `1.0e-2` (`1e8 / 1e10`), not `1.0e8` -- passing the latter silently
+  finds zero neighbours for every satellite (confirmed against a real
+  run: max halo mass in that catalogue was ~6.4e4 in native units, i.e.
+  ~6.4e14 Msun, nowhere close to a `1.0e8`-native-units threshold).
+  `EnvironmentStage`'s "no neighbours found" warning now reports the
+  actual candidate mass range alongside the threshold, and both stages'
+  docstrings spell out the 1e10 convention explicitly.
+  `_build_endtoend_notebook.py`/`configs/dorcha.yaml`'s example values
+  and comments are corrected to match.
 - **`SatelliteID` stability**: assigned per-build by
   `_concatenate_contexts` (globally, across every `HostJob`), not
   guaranteed stable across independent catalogue rebuilds (e.g. if the

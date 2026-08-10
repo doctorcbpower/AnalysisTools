@@ -113,6 +113,25 @@ def test_no_neighbours_above_threshold_warns_and_zeros_density(caplog):
     assert np.isnan(result.columns[
         "Satellites/Environment/DistanceToNearestMassiveNeighbour"][0])
     assert any("no neighbours" in r.message for r in caplog.records)
+    # candidate mass range (host row0 excluded, satellite row1 excluded)
+    # reported for units-mismatch diagnosis: row2's mass=1e8
+    assert any("1.000e+08" in r.message for r in caplog.records)
+    assert any("GADGET/Arepo" in r.message for r in caplog.records)
+
+
+def test_no_neighbours_warning_reports_no_candidates_when_none_exist(caplog):
+    # only host + the one satellite -- no candidate halos to report a
+    # mass range for at all
+    halos = _FakeHalos(mass=[1e12, 1e9], pos=[[0, 0, 0], [0, 0, 0]])
+    epoch = _FakeEpoch(halos)
+    context = _context(halo_row=[1], pos_z0=[[0, 0, 0]])
+
+    stage = EnvironmentStage(epoch, host_row=0, mass_threshold=1e10,
+                             aperture_radius=5.0)
+    with caplog.at_level("WARNING"):
+        stage.run(context)
+
+    assert any("no candidates at all" in r.message for r in caplog.records)
 
 
 def test_periodic_wrap_finds_true_nearest_distance():
