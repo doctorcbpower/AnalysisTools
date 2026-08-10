@@ -174,6 +174,22 @@ def test_stellar_mass_exceeding_formed_mass_is_an_error():
     assert len(issues) == 1
 
 
+def test_stellar_mass_exceeding_formed_mass_message_reports_worst_case_ratio():
+    # two offenders: row 0 ratio=2x, row 1 ratio=4x -- message should
+    # single out the worse of the two (row 1) with its actual values.
+    context = _sfh_context(sfh=[[1.0], [1.0]], stellar_mass=[2e9, 4e9],
+                           edges=[0.0, 1.0])
+
+    report = PhysicalValidator().check(context, schema=None)
+    issues = _issues(report, "stellar_mass_exceeds_formed_mass")
+    assert len(issues) == 1
+    msg = issues[0].message
+    assert "row 1" in msg
+    assert "4.000e+09" in msg          # StellarMass
+    assert "1.000e+09" in msg          # formed_mass
+    assert "4.000e+00" in msg          # ratio
+
+
 def test_stellar_mass_below_formed_mass_is_silent_mass_loss_allowed():
     context = _sfh_context(sfh=[[1.0]], stellar_mass=[5e8], edges=[0.0, 1.0])
 

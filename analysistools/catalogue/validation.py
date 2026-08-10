@@ -469,13 +469,26 @@ class PhysicalValidator(Validator):
             valid = has_sfh & ~np.isnan(stellar_mass)
             bad = valid & (formed_mass < stellar_mass * (1.0 - 1e-6))
             if np.any(bad):
+                # ratio (not just counts) is the fast way to tell a units
+                # bug (e.g. a Gyr/yr mixup -- ratio near 1e9 or 1e-9) from
+                # a small residual (ratio near 1) at a glance, without
+                # having to dig the raw arrays back out of the context.
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    ratio = np.where(bad, stellar_mass / formed_mass, np.nan)
+                worst = int(np.nanargmax(ratio))
                 report.add(
                     "error", "stellar_mass_exceeds_formed_mass",
                     f"{int(np.count_nonzero(bad))} satellite(s) have "
                     f"StellarMass exceeding the total mass formed "
                     f"(integral of SFH) -- current stellar mass can only "
                     f"be less than or equal to formed mass (mass "
-                    f"loss/return), never greater.",
+                    f"loss/return), never greater. Worst case: row "
+                    f"{worst}, StellarMass={stellar_mass[worst]:.3e}, "
+                    f"formed_mass={formed_mass[worst]:.3e} (ratio "
+                    f"{ratio[worst]:.3e}) -- a ratio near a round power of "
+                    f"ten (e.g. ~1e9/1e-9) usually means a units mismatch "
+                    f"(e.g. Msun/Gyr vs. Msun/yr) somewhere upstream, not "
+                    f"a genuine small mass-loss/binning residual.",
                     field="Satellites/GalaxyProperties/StellarMass")
 
         return report
