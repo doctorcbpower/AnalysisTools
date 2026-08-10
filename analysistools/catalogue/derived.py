@@ -695,12 +695,12 @@ class ObservabilityStage(PipelineStage):
 
 
 class DorchaSpecificStage(PipelineStage):
-    """``EarliestProgenitorRedshift`` and ``FossilFraction`` -- the only
-    two ``Satellites/DorchaProperties/*`` fields computable without
-    infrastructure this codebase doesn't have at all (particle tagging,
-    a progenitor density-field analysis, a cosmic-web classifier) or a
-    common-grid machinery this stage doesn't build (see the deferred list
-    below).
+    """``EarliestProgenitorRedshift``, ``FossilFraction``, and
+    ``NumberOfMergers`` -- the ``Satellites/DorchaProperties/*`` fields
+    computable without infrastructure this codebase doesn't have at all
+    (particle tagging, a progenitor density-field analysis, a cosmic-web
+    classifier) or a common-grid machinery this stage doesn't build (see
+    the deferred list below).
 
     ``EarliestProgenitorRedshift`` needs no new parameter: the tree walk
     (``TreeExtractStage``) already stops at the highest redshift a
@@ -721,6 +721,25 @@ class DorchaSpecificStage(PipelineStage):
     ``mass_threshold``, ``StarFormationHistoryStage``'s
     ``quenched_ssfr_threshold``, ...).
 
+    ``NumberOfMergers`` (count of snapshots along the main branch where
+    more than one progenitor merged in -- a discrete merger *event*
+    count, not the total number of merging objects) needs the full
+    progenitor list at each snapshot, not just the main-branch walk
+    ``TreeExtractStage`` already did -- ``epoch.tree.backend.
+    count_mergers()`` (``merger_tree_tools.MergerTreeTools.
+    count_mergers()``/``get_progenitors()``) provides this for **TreeFrog
+    walkable trees** (inverting the raw file's forward ``Head``/
+    ``HeadSnap`` pointers) and **SubFind-HBT trees** (walking the raw
+    file's native SubLink-style ``TreeFirstProgenitor``/
+    ``TreeNextProgenitor`` linked list). TreeFrog's non-walkable "full
+    tree" flavour still has no such field to use -- ``TreeProgenitor``
+    only ever exposes the single main progenitor, a genuine
+    missing-infrastructure gap in that flavour specifically (see
+    ``count_mergers``'s docstring). Left at the ``-1`` "not computable"
+    sentinel (matching ``SnapshotAtMpeak``/``SnapshotInfall``'s
+    existing int-field convention) for satellites/tree formats where it
+    isn't -- not a stage failure.
+
     Deliberately **not** computed here, documented rather than guessed:
 
     - ``ProgenitorParticleFraction``: needs particle tagging
@@ -733,13 +752,6 @@ class DorchaSpecificStage(PipelineStage):
     - ``FormationEnvironmentClass``: needs an actual cosmic-web
       classifier (T-web/V-web or similar) -- the same gap as
       ``EnvironmentStage``'s ``CosmicWebClass``.
-    - ``NumberOfMergers``: needs the full progenitor list at each
-      snapshot (which *other* branches merged into the main branch), not
-      just the main-branch walk this pipeline currently does --
-      ``treeio_subfind.py``/``treeio_treefrog.py`` don't parse a
-      NextProgenitor-equivalent field at all, so this is a genuine
-      missing-infrastructure gap in the *reader* layer, not just an
-      unstated modelling choice at this stage.
     - ``MassAccretionRateDM``: schema declares this on a fixed
       ``[N, N_snap]`` ``Snapshots/``-indexed grid shared by every
       satellite, but nothing establishes that common grid anywhere in
@@ -753,9 +765,11 @@ class DorchaSpecificStage(PipelineStage):
     name = "dorcha_specific"
     inputs = ("MergerTrees/main_branch",)
     outputs = ("Satellites/DorchaProperties/EarliestProgenitorRedshift",
-               "Satellites/DorchaProperties/FossilFraction")
+               "Satellites/DorchaProperties/FossilFraction",
+               "Satellites/DorchaProperties/NumberOfMergers")
 
-    def __init__(self, reionisation_lookback_time: float):
+    def __init__(self, epoch, reionisation_lookback_time: float):
+        self.epoch = epoch
         self.reionisation_lookback_time = float(reionisation_lookback_time)
 
     def run(self, context):
@@ -812,14 +826,40 @@ class DorchaSpecificStage(PipelineStage):
                     pre_reion_mass = float(np.sum(formed_mass * pre_reion_frac))
                     fossil_fraction[i] = pre_reion_mass / total_mass
 
+        number_of_mergers = np.full(n, -1, dtype=np.int16)
+        n_no_merger_info = 0
+        if self.epoch.tree is not None:
+            for i, track_ds in enumerate(main_branch):
+                if track_ds is None or len(track_ds.track) == 0:
+                    continue
+                count = self.epoch.tree.backend.count_mergers(track_ds.track)
+                if count is None:
+                    n_no_merger_info += 1
+                    continue
+                number_of_mergers[i] = count
+            if n_no_merger_info:
+                logger.warning(
+                    "%s: %d/%d satellites' NumberOfMergers left at the "
+                    "-1 sentinel (count_mergers() unsupported for this "
+                    "tree format/flavour -- see its docstring).",
+                    self.name, n_no_merger_info, n)
+        else:
+            n_no_merger_info = n
+            logger.warning(
+                "%s: this Epoch has no merger tree; NumberOfMergers left "
+                "at the -1 sentinel for every satellite.", self.name)
+
         context.columns[
             "Satellites/DorchaProperties/EarliestProgenitorRedshift"] = \
             earliest_z
         context.columns["Satellites/DorchaProperties/FossilFraction"] = \
             fossil_fraction
+        context.columns["Satellites/DorchaProperties/NumberOfMergers"] = \
+            number_of_mergers
 
         context.record_stage(self.name, n_satellites=n,
-                             n_no_track=n_no_track)
+                             n_no_track=n_no_track,
+                             n_no_merger_info=n_no_merger_info)
         return context
 
 

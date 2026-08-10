@@ -1,7 +1,8 @@
 """
 Tests for analysistools.catalogue.derived.DorchaSpecificStage (Phase 6b):
-EarliestProgenitorRedshift and FossilFraction only -- everything else in
-DorchaProperties is documented as deferred (see the class docstring).
+EarliestProgenitorRedshift, FossilFraction, and NumberOfMergers --
+everything else in DorchaProperties is documented as deferred (see the
+class docstring).
 """
 import os
 
@@ -58,6 +59,32 @@ def _col(result, name):
     return result.columns[f"Satellites/DorchaProperties/{name}"]
 
 
+class _FakeTreeBackend:
+    """Stand-in for MergerTreeTools -- only count_mergers() is used by
+    DorchaSpecificStage."""
+
+    def __init__(self, counts_by_id=None):
+        self.counts_by_id = counts_by_id or {}
+        self.calls = []
+
+    def count_mergers(self, track):
+        self.calls.append(track.halo_id)
+        return self.counts_by_id.get(track.halo_id)
+
+
+class _FakeTree:
+    def __init__(self, backend=None):
+        self.backend = backend or _FakeTreeBackend()
+
+
+class _FakeEpoch:
+    """No-tree by default (the plain reionisation-only test's usual
+    case); pass tree=_FakeTree(...) for the NumberOfMergers tests."""
+
+    def __init__(self, tree=None):
+        self.tree = tree
+
+
 # ---------------------------------------------------------------------------
 # EarliestProgenitorRedshift
 # ---------------------------------------------------------------------------
@@ -66,7 +93,7 @@ def test_earliest_progenitor_redshift_is_tracks_first_entry():
     # ascending time -> descending redshift; first entry = highest z
     track = _track(redshifts=[8.0, 4.0, 1.0, 0.0])
     context = _context([track])
-    stage = DorchaSpecificStage(reionisation_lookback_time=13.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=13.0)
     result = stage.run(context)
 
     assert _col(result, "EarliestProgenitorRedshift")[0] == pytest.approx(8.0)
@@ -74,7 +101,7 @@ def test_earliest_progenitor_redshift_is_tracks_first_entry():
 
 def test_earliest_progenitor_redshift_nan_for_unresolved_track():
     context = _context([None])
-    stage = DorchaSpecificStage(reionisation_lookback_time=13.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=13.0)
     result = stage.run(context)
 
     assert np.isnan(_col(result, "EarliestProgenitorRedshift")[0])
@@ -82,7 +109,7 @@ def test_earliest_progenitor_redshift_nan_for_unresolved_track():
 
 
 def test_check_inputs_requires_main_branch():
-    stage = DorchaSpecificStage(reionisation_lookback_time=13.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=13.0)
     with pytest.raises(RuntimeError, match="dorcha_specific"):
         stage.check_inputs(PipelineContext())
 
@@ -94,7 +121,7 @@ def test_check_inputs_requires_main_branch():
 def test_fossil_fraction_nan_without_sfh():
     track = _track(redshifts=[8.0, 0.0])
     context = _context([track])  # no SFH at all
-    stage = DorchaSpecificStage(reionisation_lookback_time=2.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=2.0)
     result = stage.run(context)
 
     assert np.isnan(_col(result, "FossilFraction")[0])
@@ -104,7 +131,7 @@ def test_fossil_fraction_nan_and_warns_without_time_bin_edges_meta(caplog):
     track = _track(redshifts=[8.0, 0.0])
     context = _context([track], sfh=[[10.0, 10.0, 10.0, 10.0]])
     # SFH present but meta["time_bin_edges_sfh"] deliberately not set
-    stage = DorchaSpecificStage(reionisation_lookback_time=2.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=2.0)
     with caplog.at_level("WARNING"):
         result = stage.run(context)
 
@@ -118,7 +145,7 @@ def test_fossil_fraction_exact_fractional_overlap():
     track = _track(redshifts=[8.0, 0.0])
     context = _context([track], sfh=[[10.0, 10.0, 10.0, 10.0]],
                        time_bin_edges=TIME_BIN_EDGES)
-    stage = DorchaSpecificStage(reionisation_lookback_time=2.5)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=2.5)
     result = stage.run(context)
 
     # bin2: 0.5 Gyr of its 1 Gyr width is pre-reionisation; bin3: all of it.
@@ -130,7 +157,7 @@ def test_fossil_fraction_all_before_reionisation():
     track = _track(redshifts=[8.0, 0.0])
     context = _context([track], sfh=[[10.0, 10.0, 10.0, 10.0]],
                        time_bin_edges=TIME_BIN_EDGES)
-    stage = DorchaSpecificStage(reionisation_lookback_time=0.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=0.0)
     result = stage.run(context)
     assert _col(result, "FossilFraction")[0] == pytest.approx(1.0)
 
@@ -139,7 +166,7 @@ def test_fossil_fraction_all_after_reionisation():
     track = _track(redshifts=[8.0, 0.0])
     context = _context([track], sfh=[[10.0, 10.0, 10.0, 10.0]],
                        time_bin_edges=TIME_BIN_EDGES)
-    stage = DorchaSpecificStage(reionisation_lookback_time=10.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=10.0)
     result = stage.run(context)
     assert _col(result, "FossilFraction")[0] == pytest.approx(0.0)
 
@@ -148,7 +175,7 @@ def test_fossil_fraction_zero_total_mass_stays_nan():
     track = _track(redshifts=[8.0, 0.0])
     context = _context([track], sfh=[[0.0, 0.0, 0.0, 0.0]],
                        time_bin_edges=TIME_BIN_EDGES)
-    stage = DorchaSpecificStage(reionisation_lookback_time=2.0)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=2.0)
     result = stage.run(context)
     assert np.isnan(_col(result, "FossilFraction")[0])
 
@@ -159,11 +186,74 @@ def test_fossil_fraction_skips_satellite_with_nan_sfh_row():
     sfh = np.array([[10.0, 10.0, 10.0, 10.0], [np.nan] * 4])
     context = _context([track_a, track_b], sfh=sfh,
                        time_bin_edges=TIME_BIN_EDGES)
-    stage = DorchaSpecificStage(reionisation_lookback_time=2.5)
+    stage = DorchaSpecificStage(_FakeEpoch(), reionisation_lookback_time=2.5)
     result = stage.run(context)
 
     assert not np.isnan(_col(result, "FossilFraction")[0])
     assert np.isnan(_col(result, "FossilFraction")[1])
+
+
+# ---------------------------------------------------------------------------
+# NumberOfMergers
+# ---------------------------------------------------------------------------
+
+def test_number_of_mergers_uses_epoch_tree_backend_count_mergers():
+    track_a = _track(redshifts=[8.0, 0.0], halo_id=1)
+    track_b = _track(redshifts=[6.0, 0.0], halo_id=2)
+    backend = _FakeTreeBackend({1: 3, 2: 0})
+    context = _context([track_a, track_b])
+    stage = DorchaSpecificStage(_FakeEpoch(tree=_FakeTree(backend)),
+                                reionisation_lookback_time=13.0)
+    result = stage.run(context)
+
+    np.testing.assert_array_equal(_col(result, "NumberOfMergers"), [3, 0])
+    assert sorted(backend.calls) == [1, 2]
+
+
+def test_number_of_mergers_minus_one_sentinel_when_backend_returns_none():
+    # e.g. a SubFind-HBT tree, where count_mergers() always returns None
+    track = _track(redshifts=[8.0, 0.0], halo_id=1)
+    backend = _FakeTreeBackend({})  # no entry -> count_mergers returns None
+    context = _context([track])
+    stage = DorchaSpecificStage(_FakeEpoch(tree=_FakeTree(backend)),
+                                reionisation_lookback_time=13.0)
+    result = stage.run(context)
+
+    assert _col(result, "NumberOfMergers")[0] == -1
+    assert result.provenance[0]["n_no_merger_info"] == 1
+
+
+def test_number_of_mergers_minus_one_sentinel_when_epoch_has_no_tree(caplog):
+    track = _track(redshifts=[8.0, 0.0], halo_id=1)
+    context = _context([track])
+    stage = DorchaSpecificStage(_FakeEpoch(tree=None),
+                                reionisation_lookback_time=13.0)
+    with caplog.at_level("WARNING"):
+        result = stage.run(context)
+
+    assert _col(result, "NumberOfMergers")[0] == -1
+    assert result.provenance[0]["n_no_merger_info"] == 1
+    assert any("no merger tree" in r.message for r in caplog.records)
+
+
+def test_number_of_mergers_minus_one_sentinel_for_unresolved_track():
+    context = _context([None])
+    stage = DorchaSpecificStage(_FakeEpoch(tree=_FakeTree()),
+                                reionisation_lookback_time=13.0)
+    result = stage.run(context)
+
+    assert _col(result, "NumberOfMergers")[0] == -1
+
+
+def test_number_of_mergers_dtype_is_int16():
+    track = _track(redshifts=[8.0, 0.0], halo_id=1)
+    backend = _FakeTreeBackend({1: 2})
+    context = _context([track])
+    stage = DorchaSpecificStage(_FakeEpoch(tree=_FakeTree(backend)),
+                                reionisation_lookback_time=13.0)
+    result = stage.run(context)
+
+    assert _col(result, "NumberOfMergers").dtype == np.int16
 
 
 # ---------------------------------------------------------------------------
@@ -192,10 +282,21 @@ def test_full_pipeline_does_not_crash():
     context = StarFormationHistoryStage(
         epoch, backend, time_bin_edges=TIME_BIN_EDGES,
         quenched_ssfr_threshold=1e-11).run(context)
-    context = DorchaSpecificStage(reionisation_lookback_time=13.0).run(context)
+    context = DorchaSpecificStage(epoch, reionisation_lookback_time=13.0).run(context)
 
     n = len(satellite_rows)
     assert _col(context, "EarliestProgenitorRedshift").shape == (n,)
     assert _col(context, "FossilFraction").shape == (n,)
     # DMO snapshot -> no stars -> SFH all NaN -> FossilFraction all NaN too
     assert np.all(np.isnan(_col(context, "FossilFraction")))
+
+    # bundled tree is a TreeFrog walkable tree -> NumberOfMergers should
+    # be genuinely computed (not left at the -1 sentinel), and match an
+    # independent call to the same backend method per satellite.
+    number_of_mergers = _col(context, "NumberOfMergers")
+    assert number_of_mergers.shape == (n,)
+    assert number_of_mergers.dtype == np.int16
+    main_branch = context.columns["MergerTrees/main_branch"]
+    for i, track_ds in enumerate(main_branch):
+        expected = epoch.tree.backend.count_mergers(track_ds.track)
+        assert number_of_mergers[i] == expected

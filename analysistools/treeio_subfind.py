@@ -55,6 +55,18 @@ class SubFindTreeData:
     TreeMainProgenitor: np.ndarray
     TreeFirstHaloInFOFgroup: np.ndarray
     TreeNextHaloInFOFgroup: np.ndarray
+    # SubLink-style progenitor linked list: TreeFirstProgenitor is the
+    # first entry, TreeNextProgenitor chains through the rest (-1
+    # terminates); walking it gives *every* progenitor of a node, not
+    # just the main-branch one -- see get_progenitors_subfind(). Present
+    # in real HBT+ tree files (TreeDescendant/TreeFirstDescendant/
+    # TreeNextDescendant also exist there but aren't read here -- nothing
+    # in this codebase needs the reverse/sibling-descendant direction
+    # yet). None if this tree file doesn't carry them (older/trimmed
+    # files) -- get_progenitors_subfind() raises clearly rather than
+    # silently reporting "no progenitors" for every node.
+    TreeFirstProgenitor: Optional[np.ndarray]
+    TreeNextProgenitor: Optional[np.ndarray]
 
     # (snapnum, SubhaloNr) -> row index into the TreeHalos/* arrays
     lookup: Dict[Tuple[int, int], int]
@@ -111,6 +123,22 @@ def read_subfind_hbt(filename: str, logger=None) -> SubFindTreeData:
         TreeMainProgenitor = f["TreeHalos/TreeMainProgenitor"][()]
         TreeFirstHaloInFOFgroup = f["TreeHalos/TreeFirstHaloInFOFgroup"][()]
         TreeNextHaloInFOFgroup = f["TreeHalos/TreeNextHaloInFOFgroup"][()]
+        if "TreeFirstProgenitor" in f["TreeHalos"]:
+            TreeFirstProgenitor = f["TreeHalos/TreeFirstProgenitor"][()]
+            TreeNextProgenitor = f["TreeHalos/TreeNextProgenitor"][()]
+        else:
+            # older/trimmed tree files may not carry the full linked
+            # list -- get_progenitors_subfind()/count_mergers() degrade
+            # to "unsupported" (see their docstrings) rather than this
+            # reader failing outright.
+            if logger:
+                logger.warning(
+                    "TreeHalos/TreeFirstProgenitor not found in this tree "
+                    "file -- full progenitor lists (get_progenitors(), "
+                    "count_mergers()) won't be available, only the "
+                    "TreeMainProgenitor branch.")
+            TreeFirstProgenitor = None
+            TreeNextProgenitor = None
 
     # index lookup: (snapnum, subhalo id) -> array index. O(N) to build,
     # O(1) per lookup thereafter -- replaces repeated np.where chains.
@@ -130,8 +158,60 @@ def read_subfind_hbt(filename: str, logger=None) -> SubFindTreeData:
         TreeMainProgenitor=TreeMainProgenitor,
         TreeFirstHaloInFOFgroup=TreeFirstHaloInFOFgroup,
         TreeNextHaloInFOFgroup=TreeNextHaloInFOFgroup,
+        TreeFirstProgenitor=TreeFirstProgenitor,
+        TreeNextProgenitor=TreeNextProgenitor,
         lookup=lookup,
     )
+
+
+def get_progenitors_subfind(data: SubFindTreeData, halo_id: int,
+                            snapnum: int) -> List[Dict[str, Any]]:
+    """Every progenitor of (halo_id, snapnum): walk the SubLink-style
+    linked list ``TreeFirstProgenitor`` -> (``TreeNextProgenitor`` until
+    ``-1``) -- unlike TreeFrog's walkable-tree format (which needs a
+    reverse index built from forward Head/HeadSnap pointers, see
+    ``treeio_treefrog.get_progenitors_treefrog``), SubFind-HBT trees give
+    every progenitor as a direct linked list of row indices, no reverse
+    lookup needed.
+
+    Returns
+    -------
+    list of dict, each ``{"halo_id", "snapnum", "is_main"}`` -- "is_main"
+    marks the one entry matching this node's own ``TreeMainProgenitor``
+    (empirically always the linked list's first entry, but compared
+    explicitly rather than assumed). Empty list for a root (no
+    progenitor).
+
+    Raises
+    ------
+    MergerTreeError
+        If (halo_id, snapnum) isn't in the tree, or this tree file
+        doesn't carry ``TreeFirstProgenitor``/``TreeNextProgenitor``
+        (older/trimmed tree files -- see ``read_subfind_hbt``).
+    """
+    if data.TreeFirstProgenitor is None:
+        raise MergerTreeError(
+            "This SubFind-HBT tree file has no TreeFirstProgenitor/"
+            "TreeNextProgenitor fields (see read_subfind_hbt's warning) "
+            "-- only the TreeMainProgenitor branch is available, not the "
+            "full progenitor list.")
+    key = (int(snapnum), int(halo_id))
+    if key not in data.lookup:
+        raise MergerTreeError(
+            f"(snapnum={snapnum}, id={halo_id}) not found in tree.")
+    index = data.lookup[key]
+    own_main = int(data.TreeMainProgenitor[index])
+
+    progenitors = []
+    cur = int(data.TreeFirstProgenitor[index])
+    while cur != -1:
+        progenitors.append({
+            "halo_id": int(data.SubhaloNr[cur]),
+            "snapnum": int(data.SnapNum[cur]),
+            "is_main": cur == own_main,
+        })
+        cur = int(data.TreeNextProgenitor[cur])
+    return progenitors
 
 
 def resolve_group_first_sub(data: SubFindTreeData, group_id: int, snapnum: int) -> int:
@@ -195,6 +275,11 @@ def walk_subfind(data: SubFindTreeData, halo_id: int, snapnum: int,
         "VelDisp": data.SubhaloVelDisp[idx_arr],
         "Vmax": data.SubhaloVmax[idx_arr],
         "VmaxRad": data.SubhaloVmaxRad[idx_arr],
+        # native per-snapshot ID, parallel to SnapNum -- same role as
+        # TreeFrog's extra["ID"], used by
+        # MergerTreeTools.count_mergers() to resolve each snapshot's own
+        # (halo_id, snapnum) for a get_progenitors() call.
+        "SubhaloNr": data.SubhaloNr[idx_arr],
     }
     if data.GrpR200 is not None:
         extra["GroupR200"] = data.GrpR200[idx_arr]

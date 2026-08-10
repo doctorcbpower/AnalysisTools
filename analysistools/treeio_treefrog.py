@@ -65,10 +65,21 @@ class TreeFrogWalkableData:
     ID: Dict[str, np.ndarray]
     Tail: Dict[str, np.ndarray]                 # main progenitor (temporal ID)
     TailSnap: Dict[str, np.ndarray]
+    Head: Dict[str, np.ndarray]                 # descendant (temporal ID)
+    HeadSnap: Dict[str, np.ndarray]
     Num_progen: Dict[str, np.ndarray]
 
     # (snapnum, halo id) -> (group key, local index within that group)
     lookup: Dict[Tuple[int, int], Tuple[str, int]]
+    # (head_snap, head_id) -> every (group, local_idx) whose Head/HeadSnap
+    # points there -- the reverse of `lookup`'s forward Tail walk, and
+    # what makes get_progenitors_treefrog() possible: this is the *only*
+    # one of this codebase's tree readers with a forward (descendant)
+    # pointer at all (see get_progenitors_treefrog's docstring), so full
+    # (not just main-branch) progenitor lists are TreeFrog-walkable-tree
+    # only, not available for the "full tree" TreeFrog flavour or
+    # SubFind-HBT.
+    descendant_lookup: Dict[Tuple[int, int], list]
 
 
 def _read_treefrog_walkable(f, header, logger=None) -> TreeFrogWalkableData:
@@ -78,6 +89,8 @@ def _read_treefrog_walkable(f, header, logger=None) -> TreeFrogWalkableData:
     ID: Dict[str, np.ndarray] = {}
     Tail: Dict[str, np.ndarray] = {}
     TailSnap: Dict[str, np.ndarray] = {}
+    Head: Dict[str, np.ndarray] = {}
+    HeadSnap: Dict[str, np.ndarray] = {}
     Num_progen: Dict[str, np.ndarray] = {}
 
     snaps = f["Snapshots"]
@@ -91,21 +104,29 @@ def _read_treefrog_walkable(f, header, logger=None) -> TreeFrogWalkableData:
         ID[group] = g["ID"][()]
         Tail[group] = g["Tail"][()]
         TailSnap[group] = g["TailSnap"][()]
+        Head[group] = g["Head"][()]
+        HeadSnap[group] = g["HeadSnap"][()]
         Num_progen[group] = g["Num_progen"][()] if "Num_progen" in g \
             else np.zeros(len(ID[group]), dtype=np.uint32)
 
     lookup: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    descendant_lookup: Dict[Tuple[int, int], list] = {}
     for group, snapnum in snap_of_group.items():
         for local_idx, hid in enumerate(ID[group]):
             lookup[(snapnum, int(hid))] = (group, local_idx)
+            desc_key = (int(HeadSnap[group][local_idx]),
+                       int(Head[group][local_idx]))
+            descendant_lookup.setdefault(desc_key, []).append(
+                (group, local_idx))
     if logger:
         logger.info(f"Walkable tree: indexed {len(lookup):,} "
                     f"(snapshot, halo) tree nodes.")
 
     return TreeFrogWalkableData(
         metadata=header, snap_of_group=snap_of_group, Time=Time,
-        ID=ID, Tail=Tail, TailSnap=TailSnap, Num_progen=Num_progen,
-        lookup=lookup,
+        ID=ID, Tail=Tail, TailSnap=TailSnap, Head=Head, HeadSnap=HeadSnap,
+        Num_progen=Num_progen, lookup=lookup,
+        descendant_lookup=descendant_lookup,
     )
 
 
@@ -293,6 +314,49 @@ def _walk_treefrog_walkable(data: TreeFrogWalkableData, halo_id: int,
                "Num_progen": np.array([data.Num_progen[g][i]
                                        for g, i in chain])},
     )
+
+
+def get_progenitors_treefrog(data: TreeFrogWalkableData, halo_id: int,
+                             snapnum: int) -> list:
+    """Every node the tree builder considers a progenitor of (halo_id,
+    snapnum) -- not just the main-branch one ``Tail``/``walk_treefrog``
+    follows. Uses ``descendant_lookup`` (every node's forward Head/
+    HeadSnap pointer, inverted), so this returns the *actual* set of
+    merging progenitors, cross-checked against (and normally identical
+    in count to) the tree builder's own ``Num_progen`` for this node.
+
+    A node at the most recent snapshot in the tree self-loops (Head ==
+    its own ID, since it has no descendant yet), which would otherwise
+    make a node its own "progenitor" in the reverse lookup -- filtered
+    out explicitly.
+
+    Returns
+    -------
+    list of dict, each ``{"halo_id", "snapnum", "is_main"}`` -- "is_main"
+    is True for the one entry matching this node's own Tail/TailSnap
+    (the branch ``walk_treefrog`` itself would follow), False for every
+    other (i.e. merging-in) progenitor. Empty list for a root (no
+    progenitor at all).
+    """
+    key = (int(snapnum), int(halo_id))
+    if key not in data.lookup:
+        raise MergerTreeError(
+            f"(snapnum={snapnum}, id={halo_id}) not found in tree.")
+    group, local_idx = data.lookup[key]
+    own_tail = int(data.Tail[group][local_idx])
+    own_tail_snap = int(data.TailSnap[group][local_idx])
+
+    progenitors = []
+    for prog_group, prog_idx in data.descendant_lookup.get(key, []):
+        prog_id = int(data.ID[prog_group][prog_idx])
+        prog_snap = data.snap_of_group[prog_group]
+        if (prog_id, prog_snap) == (halo_id, snapnum):
+            continue  # the final-snapshot self-loop, not a real progenitor
+        progenitors.append({
+            "halo_id": prog_id, "snapnum": prog_snap,
+            "is_main": (prog_id, prog_snap) == (own_tail, own_tail_snap),
+        })
+    return progenitors
 
 
 def walk_treefrog(data, halo_id: int, snapnum: int,

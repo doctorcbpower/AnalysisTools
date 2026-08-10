@@ -633,7 +633,7 @@ def _build_derived_stage(name: str, cls: type, job: "HostJob",
     if name == "observability":
         return cls(job.epoch, **options)
     if name == "dorcha_specific":
-        return cls(**options)
+        return cls(job.epoch, **options)
     raise ValueError(
         f"CatalogueBuilder doesn't know how to construct derived stage "
         f"'{name}' -- add a branch to _build_derived_stage.")

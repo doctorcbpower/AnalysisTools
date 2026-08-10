@@ -109,11 +109,34 @@ condensed index.
   built exactly this kind of common-grid machinery for SFH
   (`time_bin_edges`/`rebin_sfh`) — applying the same approach to mass
   would be the natural way to close this.
-- Full progenitor-list-dependent quantities (anything needing
-  `NextProgenitor`/full merger history, not just the main branch) — the
-  tree readers (`treeio_subfind.py`, `treeio_treefrog.py`) only expose
-  the main-branch walk today; this is a missing-infrastructure gap in the
-  *reader* layer, not just an unstated modelling choice at this stage.
+- Full progenitor-list-dependent quantities are **now available for
+  TreeFrog walkable trees and SubFind-HBT trees**:
+  - `treeio_treefrog.py` reads the raw file's forward `Head`/`HeadSnap`
+    pointers (previously ignored) and inverts them into
+    `TreeFrogWalkableData.descendant_lookup`.
+  - `treeio_subfind.py` reads the raw file's native SubLink-style
+    linked list (`TreeFirstProgenitor`/`TreeNextProgenitor` — also
+    previously ignored; a real HBT+ tree file carries these plus
+    `TreeDescendant`/`TreeFirstDescendant`/`TreeNextDescendant`, none of
+    which this codebase's SubFind reader read before this) — no reverse
+    index needed here, the linked list gives every progenitor directly.
+    Older/trimmed SubFind-HBT files without these two fields degrade to
+    `MergerTreeError` from `get_progenitors_subfind()`, not a silent
+    "no progenitors" for every node.
+  - Either way, `get_progenitors_treefrog()`/`get_progenitors_subfind()`
+    (dispatched via `MergerTreeTools.get_progenitors()`) return every
+    progenitor of a node, and `MergerTreeTools.count_mergers()` walks a
+    track counting merger-event snapshots
+    (`derived.DorchaSpecificStage`'s `NumberOfMergers`, see below).
+  - Still **not** available for TreeFrog's non-walkable "full tree"
+    flavour (`TreeProgenitor` only ever exposes the single main
+    progenitor, no reverse/forward pointer to invert) — a genuine
+    missing-infrastructure gap specific to that flavour.
+  - No bundled SubFind-HBT test fixture exists yet (a small one is
+    planned) — the SubFind-specific tests in
+    `tests/test_merger_tree_progenitors.py` use hand-built fixtures for
+    unit coverage, plus real-data checks gated on the
+    `ANALYSISTOOLS_SUBFIND_TREE_PATH` env var (skipped without it).
 - `OrbitalEnergy`/`OrbitalPeriod` (need a host potential model) and
   `TidalTrackClass` (needs a tidal-tracks classification model, e.g.
   Peñarrubia et al. tables) — deliberately left out of
@@ -139,13 +162,23 @@ condensed index.
   as-is (see its docstring).
 
 ### `DorchaSpecificStage`
-- Only `EarliestProgenitorRedshift` and `FossilFraction` are implemented.
-  Every other `DorchaProperties` field (`ProgenitorParticleFraction`,
-  `PeakOverdensity`, `FormationEnvironmentClass`, `NumberOfMergers`,
-  `MassAccretionRateDM`) needs particle tagging, a progenitor
-  density-field analysis, the cosmic-web classifier, or the full
-  progenitor-list tree parsing above — see the class docstring in
-  `derived.py` for the field-by-field mapping.
+- `EarliestProgenitorRedshift`, `FossilFraction`, and `NumberOfMergers`
+  are implemented. `NumberOfMergers` needs `epoch` (new required
+  constructor argument, alongside `reionisation_lookback_time`) and
+  computes for TreeFrog walkable trees and SubFind-HBT trees (see the
+  full-progenitor-list note above) — left at the `-1` sentinel (matching
+  `SnapshotAtMpeak`/`SnapshotInfall`'s existing convention) for
+  TreeFrog's non-walkable "full tree" flavour, a SubFind-HBT tree file
+  missing the progenitor-list fields, or when the `Epoch` has no tree at
+  all.
+- Still deferred: `ProgenitorParticleFraction` (needs particle tagging --
+  cross-snapshot particle-ID matching against a progenitor's particle set
+  at an explicit reference epoch; genuinely new infrastructure, not
+  attempted here), `PeakOverdensity` (needs a progenitor density-field
+  analysis), `FormationEnvironmentClass` (needs the cosmic-web
+  classifier), `MassAccretionRateDM` (needs the common-grid machinery
+  noted above) — see the class docstring in `derived.py` for the
+  field-by-field mapping.
 
 ### Cross-cutting
 - **`SatelliteID` stability**: assigned per-build by

@@ -382,6 +382,93 @@ class MergerTreeTools:
                              time_array=getattr(self, "Time", None))
         raise MergerTreeError(f"Unhandled format '{self.treefileformat}'")
 
+    #: HaloTrack.extra key holding each format's native per-snapshot ID,
+    #: parallel to SnapNum -- used by count_mergers() to resolve
+    #: (halo_id, snapnum) pairs along a track for get_progenitors() calls.
+    _NATIVE_ID_EXTRA_KEY = {"TreeFrog": "ID", "SubFind": "SubhaloNr"}
+
+    def get_progenitors(self, halo_id: int, snapnum: int) -> List[Dict[str, Any]]:
+        """
+        Every node the tree builder considers a progenitor of
+        (halo_id, snapnum) -- not just the single main-branch one
+        ``get_track()``'s ``Tail``/``TreeMainProgenitor`` walk follows.
+        Each entry: ``{"halo_id", "snapnum", "is_main"}``.
+
+        Implemented for:
+
+        - **TreeFrog walkable trees**: no native progenitor-list field,
+          so this inverts the forward ``Head``/``HeadSnap`` pointer into
+          a reverse lookup (``TreeFrogWalkableData.descendant_lookup``,
+          built once at read time) -- see
+          ``treeio_treefrog.get_progenitors_treefrog``.
+        - **SubFind-HBT trees**: a native SubLink-style linked list
+          (``TreeFirstProgenitor``/``TreeNextProgenitor``) gives every
+          progenitor directly, no reverse lookup needed -- see
+          ``treeio_subfind.get_progenitors_subfind``. Older/trimmed
+          SubFind-HBT tree files that don't carry these two fields raise
+          ``MergerTreeError`` here (see ``read_subfind_hbt``'s warning),
+          not silently report "no progenitors" for every node.
+
+        Not implemented for TreeFrog's non-walkable "full tree" flavour
+        (``TreeProgenitor`` only ever exposes the single main progenitor,
+        and there's no reverse/forward pointer in that flavour to
+        invert) -- raises ``MergerTreeError``.
+        """
+        from .treeio_subfind import SubFindTreeData, get_progenitors_subfind
+        from .treeio_treefrog import TreeFrogWalkableData, get_progenitors_treefrog
+
+        if self.treefileformat == "TreeFrog" and \
+                isinstance(self.data, TreeFrogWalkableData):
+            return get_progenitors_treefrog(self.data, int(halo_id),
+                                            int(snapnum))
+        if self.treefileformat == "SubFind" and \
+                isinstance(self.data, SubFindTreeData):
+            return get_progenitors_subfind(self.data, int(halo_id),
+                                           int(snapnum))
+        raise MergerTreeError(
+            f"get_progenitors() needs a TreeFrog walkable tree or a "
+            f"SubFind-HBT tree with TreeFirstProgenitor/TreeNextProgenitor; "
+            f"this tree is '{self.treefileformat}'"
+            + (" (the non-walkable full-tree flavour)"
+              if self.treefileformat == "TreeFrog" else "") + ".")
+
+    def count_mergers(self, track: HaloTrack) -> Optional[int]:
+        """
+        Number of snapshots along `track`'s main branch where more than
+        one progenitor merged in (``get_progenitors()`` finds >1 entry)
+        -- i.e. discrete merger *events*, not the total count of merging
+        objects (a 3-way merger at one snapshot counts once here, not
+        twice).
+
+        Returns ``None`` (rather than raising) if this tree
+        format/flavour doesn't support ``get_progenitors()`` (see its
+        docstring), or `track` has no native per-snapshot ID recorded in
+        ``track.extra`` (key given by ``_NATIVE_ID_EXTRA_KEY`` --
+        ``"ID"`` for TreeFrog, ``"SubhaloNr"`` for SubFind) -- callers
+        (e.g. ``derived.DorchaSpecificStage``) treat that as "not
+        computable for this tree", the same missingness convention used
+        everywhere else in the catalogue pipeline.
+        """
+        from .treeio_subfind import SubFindTreeData
+        from .treeio_treefrog import TreeFrogWalkableData
+
+        key = self._NATIVE_ID_EXTRA_KEY.get(self.treefileformat)
+        ids = track.extra.get(key) if key else None
+        supported = (
+            (self.treefileformat == "TreeFrog"
+            and isinstance(self.data, TreeFrogWalkableData))
+            or (self.treefileformat == "SubFind"
+               and isinstance(self.data, SubFindTreeData)
+               and self.data.TreeFirstProgenitor is not None)
+        )
+        if ids is None or not supported:
+            return None
+        n_mergers = 0
+        for snap, hid in zip(track.SnapNum, ids):
+            if len(self.get_progenitors(int(hid), int(snap))) > 1:
+                n_mergers += 1
+        return n_mergers
+
     def _resolve_group_first_sub(self, group_id: int, snapnum: int) -> int:
         if self.treefileformat != "SubFind":
             raise MergerTreeError(
