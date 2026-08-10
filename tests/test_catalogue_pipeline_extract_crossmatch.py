@@ -199,6 +199,101 @@ def test_tree_extract_handles_unresolvable_halo_gracefully():
     assert result.provenance[0]["n_missing"] == 3
 
 
+def _fake_track(halo_id, extra):
+    # mirrors TrackDataset's structure: .track is the underlying HaloTrack
+    return SimpleNamespace(track=SimpleNamespace(halo_id=halo_id, extra=extra))
+
+
+def test_tree_extract_refines_m200c_and_r200c_from_tree_group_mass_radius():
+    # HaloExtractStage's Group-table M200c_z0/R200c_z0 (e.g. 999.0, here,
+    # deliberately different from the tree's resolved values) should be
+    # overwritten with extra["GroupM200"]/["GroupR200"]'s *last* entry --
+    # the z0 value of the same tree walk that produces Mpeak.
+    tracks = {
+        0: _fake_track(100, {"GroupM200": np.array([10.0, 12.0, 15.0]),
+                             "GroupR200": np.array([1.0, 1.1, 1.2])}),
+        1: _fake_track(101, {"GroupM200": np.array([20.0, 25.0]),
+                             "GroupR200": np.array([2.0, 2.5])}),
+    }
+    epoch = SimpleNamespace(tree=object(),
+                            track_of=lambda index: tracks[index])
+    context = PipelineContext()
+    context.columns["Satellites/_internal/halo_row"] = np.array([0, 1])
+    context.columns["Satellites/HaloProperties/M200c_z0"] = \
+        np.array([999.0, 999.0])
+    context.columns["Satellites/HaloProperties/R200c_z0"] = \
+        np.array([999.0, 999.0])
+
+    result = TreeExtractStage(epoch).run(context)
+
+    np.testing.assert_allclose(
+        result.columns["Satellites/HaloProperties/M200c_z0"], [15.0, 25.0])
+    np.testing.assert_allclose(
+        result.columns["Satellites/HaloProperties/R200c_z0"], [1.2, 2.5])
+    assert result.provenance[0]["n_refined_mass"] == 2
+    assert result.provenance[0]["n_refined_radius"] == 2
+
+
+def test_tree_extract_refines_mass_only_when_group_r200_absent():
+    # tree files don't always carry Group_R_Crit200 (optional field, see
+    # treeio_subfind.py) -- M200c_z0 still refines, R200c_z0 is left as
+    # HaloExtractStage's Group-table value.
+    tracks = {
+        0: _fake_track(100, {"GroupM200": np.array([10.0, 15.0])}),
+    }
+    epoch = SimpleNamespace(tree=object(),
+                            track_of=lambda index: tracks[index])
+    context = PipelineContext()
+    context.columns["Satellites/_internal/halo_row"] = np.array([0])
+    context.columns["Satellites/HaloProperties/M200c_z0"] = np.array([999.0])
+    context.columns["Satellites/HaloProperties/R200c_z0"] = np.array([5.0])
+
+    result = TreeExtractStage(epoch).run(context)
+
+    np.testing.assert_allclose(
+        result.columns["Satellites/HaloProperties/M200c_z0"], [15.0])
+    np.testing.assert_allclose(
+        result.columns["Satellites/HaloProperties/R200c_z0"], [5.0])
+    assert result.provenance[0]["n_refined_mass"] == 1
+    assert result.provenance[0]["n_refined_radius"] == 0
+
+
+def test_tree_extract_leaves_group_table_values_when_track_unresolved():
+    class _FailingTree:
+        def track_of(self, index):
+            raise MergerTreeError("not found")
+
+    epoch = SimpleNamespace(tree=object(), track_of=_FailingTree().track_of)
+    context = PipelineContext()
+    context.columns["Satellites/_internal/halo_row"] = np.array([0])
+    context.columns["Satellites/HaloProperties/M200c_z0"] = np.array([5.0])
+    context.columns["Satellites/HaloProperties/R200c_z0"] = np.array([1.0])
+
+    result = TreeExtractStage(epoch).run(context)
+
+    np.testing.assert_allclose(
+        result.columns["Satellites/HaloProperties/M200c_z0"], [5.0])
+    np.testing.assert_allclose(
+        result.columns["Satellites/HaloProperties/R200c_z0"], [1.0])
+    assert result.provenance[0]["n_refined_mass"] == 0
+    assert result.provenance[0]["n_refined_radius"] == 0
+
+
+def test_tree_extract_skips_refinement_when_no_m200c_column_present():
+    # defensive: a context without M200c_z0/R200c_z0 at all (e.g. a
+    # differently-configured pipeline) must not crash the refinement pass.
+    tracks = {0: _fake_track(100, {"GroupM200": np.array([10.0])})}
+    epoch = SimpleNamespace(tree=object(),
+                            track_of=lambda index: tracks[index])
+    context = PipelineContext()
+    context.columns["Satellites/_internal/halo_row"] = np.array([0])
+
+    result = TreeExtractStage(epoch).run(context)
+
+    assert "Satellites/HaloProperties/M200c_z0" not in result.columns
+    assert result.provenance[0]["n_refined_mass"] == 0
+
+
 # ---------------------------------------------------------------------------
 # CrossMatchStage
 # ---------------------------------------------------------------------------

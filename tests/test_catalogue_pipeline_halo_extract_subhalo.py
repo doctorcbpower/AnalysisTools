@@ -1,12 +1,19 @@
 """
 Tests for HaloExtractStage's Group-vs-Subhalo handling (GADGET/Arepo-
-family catalogues, e.g. SubFind): satellite M200c_z0/R200c_z0/Vmax_z0/
-SubhaloID_z0 (and the host's Vmax_host) should be sourced from each
-object's *primary subhalo* (via GroupFirstSub) when available, not the
-FOF Group table -- see HaloExtractStage's own docstring for the full
-rationale (this is what makes PhysicalValidator's mpeak_below_m200c_z0
-check apples-to-apples again: Mpeak, from the merger tree, is already a
-bound-subhalo mass).
+family catalogues, e.g. SubFind).
+
+M200c_z0/R200c_z0 are genuinely Group-level quantities (Group_M_Crit200/
+Group_R_Crit200 -- a Subhalo table has no R_Crit200/M_Crit200 of its
+own) and are read straight from the satellite's own Group row -- NOT
+from the Subhalo table's SubhaloMass/SubhaloHalfmassRad (an earlier
+version of this stage mistakenly did that, mislabeling a bound
+half-mass radius as R200c_z0). TreeExtractStage refines these further
+when a merger tree is available (see its own tests).
+
+Vmax_z0/Vmax_host/SubhaloID_z0 have no Group-level analogue in SubFind
+and are sourced from each object's *primary subhalo* (via
+GroupFirstSub) when available -- see HaloExtractStage's own docstring
+for the full rationale.
 
 Uses a hand-built fake Group/Subhalo catalogue pair (no bundled SubFind
 test fixture with a real GroupFirstSub column exists yet).
@@ -103,7 +110,10 @@ def _catalogue_with_subhalos(group_first_sub):
                           group_first_sub=group_first_sub, subhalos=subs)
 
 
-def test_satellite_mass_radius_vmax_sourced_from_primary_subhalo():
+def test_satellite_m200c_r200c_stay_group_level_not_subhalo():
+    # M200c_z0/R200c_z0 are Group-only concepts (Group_M_Crit200/
+    # Group_R_Crit200) -- must come from the satellite's own Group row,
+    # not the Subhalo table's SubhaloMass/SubhaloHalfmassRad.
     halos = _catalogue_with_subhalos(group_first_sub=[0, 1, 2, 3])
     epoch = _FakeEpoch(halos)
     context = HaloExtractStage(epoch, host_row=0, satellite_rows=[1, 2, 3]).run(
@@ -111,10 +121,18 @@ def test_satellite_mass_radius_vmax_sourced_from_primary_subhalo():
 
     np.testing.assert_allclose(
         context.columns["Satellites/HaloProperties/M200c_z0"],
-        [SUB_MASS[1], SUB_MASS[2], SUB_MASS[3]])
+        [GROUP_MASS[1], GROUP_MASS[2], GROUP_MASS[3]])
     np.testing.assert_allclose(
         context.columns["Satellites/HaloProperties/R200c_z0"],
-        [SUB_RADIUS[1], SUB_RADIUS[2], SUB_RADIUS[3]])
+        [GROUP_RADIUS[1], GROUP_RADIUS[2], GROUP_RADIUS[3]])
+
+
+def test_satellite_vmax_and_subhalo_id_sourced_from_primary_subhalo():
+    halos = _catalogue_with_subhalos(group_first_sub=[0, 1, 2, 3])
+    epoch = _FakeEpoch(halos)
+    context = HaloExtractStage(epoch, host_row=0, satellite_rows=[1, 2, 3]).run(
+        PipelineContext())
+
     np.testing.assert_allclose(
         context.columns["Satellites/HaloProperties/Vmax_z0"],
         [SUB_VMAX[1], SUB_VMAX[2], SUB_VMAX[3]])
@@ -147,26 +165,13 @@ def test_host_vmax_sourced_from_primary_subhalo():
     assert context.columns["Haloes/Vmax_host"][0] == pytest.approx(SUB_VMAX[0])
 
 
-def test_mpeak_consistent_relationship_mass_smaller_than_group():
-    # the whole point: with the fix, Satellites/HaloProperties/M200c_z0
-    # for a satellite is now *smaller* than that satellite's own
-    # Group_M_Crit200 would have been -- consistent with a tree-tracked
-    # bound-subhalo Mpeak, rather than systematically larger than it.
-    halos = _catalogue_with_subhalos(group_first_sub=[0, 1, 2, 3])
-    epoch = _FakeEpoch(halos)
-    context = HaloExtractStage(epoch, host_row=0, satellite_rows=[1, 2, 3]).run(
-        PipelineContext())
-
-    m200c_z0 = context.columns["Satellites/HaloProperties/M200c_z0"]
-    for i, sat_row in enumerate([1, 2, 3]):
-        assert m200c_z0[i] < GROUP_MASS[sat_row]
-
-
 def test_satellite_with_no_valid_primary_subhalo_gets_nan_not_group_fallback(
         caplog):
     # row 2's GroupFirstSub is -1 (sentinel: no identified subhalo) --
-    # must be NaN/-1, not silently fall back to the Group's own value
-    # (which would reintroduce the exact inconsistency being fixed).
+    # Vmax_z0/SubhaloID_z0 must be NaN/-1, not silently fall back to a
+    # Group-table value that would mix mass/velocity definitions.
+    # M200c_z0/R200c_z0 are unaffected either way -- they're always
+    # Group-sourced, never subhalo-sourced.
     halos = _catalogue_with_subhalos(group_first_sub=[0, 1, -1, 3])
     epoch = _FakeEpoch(halos)
     with caplog.at_level("WARNING"):
@@ -178,13 +183,15 @@ def test_satellite_with_no_valid_primary_subhalo_gets_nan_not_group_fallback(
     vmax_z0 = context.columns["Satellites/HaloProperties/Vmax_z0"]
     subhalo_id = context.columns["Satellites/Identification/SubhaloID_z0"]
 
-    assert np.isnan(m200c_z0[1])    # row 2 -> local index 1
-    assert np.isnan(r200c_z0[1])
-    assert np.isnan(vmax_z0[1])
+    np.testing.assert_allclose(m200c_z0, [GROUP_MASS[1], GROUP_MASS[2],
+                                          GROUP_MASS[3]])
+    np.testing.assert_allclose(r200c_z0, [GROUP_RADIUS[1], GROUP_RADIUS[2],
+                                          GROUP_RADIUS[3]])
+    assert np.isnan(vmax_z0[1])    # row 2 -> local index 1
     assert subhalo_id[1] == -1
     # the other two satellites are unaffected
-    assert not np.isnan(m200c_z0[0])
-    assert not np.isnan(m200c_z0[2])
+    assert not np.isnan(vmax_z0[0])
+    assert not np.isnan(vmax_z0[2])
     assert any("no valid primary subhalo" in r.message for r in caplog.records)
 
 
@@ -196,8 +203,10 @@ def test_out_of_range_group_first_sub_treated_as_invalid():
     context = HaloExtractStage(epoch, host_row=0, satellite_rows=[1, 2, 3]).run(
         PipelineContext())
 
-    m200c_z0 = context.columns["Satellites/HaloProperties/M200c_z0"]
-    assert np.isnan(m200c_z0[1])   # row 2 -> local index 1
+    vmax_z0 = context.columns["Satellites/HaloProperties/Vmax_z0"]
+    subhalo_id = context.columns["Satellites/Identification/SubhaloID_z0"]
+    assert np.isnan(vmax_z0[1])    # row 2 -> local index 1
+    assert subhalo_id[1] == -1
 
 
 def test_falls_back_to_group_table_when_no_subhalo_table():

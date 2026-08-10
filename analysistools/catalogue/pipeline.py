@@ -131,28 +131,39 @@ class HaloExtractStage(ExtractStage):
     want written.
 
     Group vs. Subhalo (GADGET/Arepo-family catalogues, e.g. SubFind):
-    ``epoch.halos`` defaults to the FOF *Group* table (``Group_M_Crit200``
-    etc -- a spherical-overdensity mass/radius that includes diffuse mass
-    no bound subhalo owns, and has no ``Vmax`` at all). A *satellite*'s
-    only sensible present-day mass/radius/Vmax is its own bound subhalo's
-    (``SubhaloMass``/``SubhaloHalfmassRad``/``SubhaloVmax``) -- the same
-    definition the merger tree's ``Mpeak`` already uses (mixing the two,
-    as this stage previously always did, is why
-    ``PhysicalValidator.mpeak_below_m200c_z0`` can fire on otherwise
-    correct data). When the catalogue has a subhalo table and a
-    ``GroupFirstSub`` column (SubFind's own group-to-primary-subhalo
-    pointer -- see ``HaloTools``'s ``centre_on_subhalo`` for the same
-    lookup used to re-centre position/velocity), ``Satellites/
-    HaloProperties/M200c_z0``/``R200c_z0``/``Vmax_z0`` and
-    ``Satellites/Identification/SubhaloID_z0`` are sourced from each
-    satellite's own primary subhalo instead of its Group row, and
-    ``Haloes/Vmax_host`` from the host's. ``Haloes/M200c``/``R200c``
-    (and ``Position``/``Velocity``, already covered by ``HaloTools``'s
-    own ``centre_on_subhalo=`` opt-in) deliberately stay Group-level --
-    those genuinely mean the group's own virial mass/radius, not a
-    per-object quantity. A satellite whose group has no valid primary
-    subhalo (``GroupFirstSub`` sentinel) gets NaN/-1 for these fields
-    rather than silently falling back to the (inconsistent) Group value.
+    ``epoch.halos`` defaults to the FOF *Group* table. ``Satellites/
+    HaloProperties/M200c_z0``/``R200c_z0`` are genuinely Group-level
+    quantities (``Group_M_Crit200``/``Group_R_Crit200``, a spherical-
+    overdensity mass/radius) and are read straight from the satellite's
+    own Group row -- a Subhalo table has no R_Crit200/M_Crit200 of its
+    own (that's a Group-only concept; an earlier version of this stage
+    mistakenly sourced ``R200c_z0`` from the Subhalo table's
+    ``SubhaloHalfmassRad``, a bound half-mass radius, not an R200-type
+    quantity -- don't reintroduce that). ``TreeExtractStage`` refines
+    ``M200c_z0``/``R200c_z0`` further when a merger tree is available,
+    using the same tree walk that produces ``Mpeak`` (see that stage's
+    docstring) -- more authoritative than a fresh Group-table lookup by
+    row index, since it's guaranteed to be the same object/snapshot.
+
+    ``Vmax`` has no Group-level analogue in SubFind (Groups don't have
+    their own Vmax) -- ``Satellites/HaloProperties/Vmax_z0`` and
+    ``Haloes/Vmax_host`` are sourced from each object's primary subhalo
+    (via ``GroupFirstSub``, SubFind's group-to-primary-subhalo pointer --
+    see ``HaloTools``'s ``centre_on_subhalo`` for the same lookup used to
+    re-centre position/velocity) when the catalogue has a subhalo table
+    and a ``GroupFirstSub`` column, falling back to the Group table's own
+    Vmax field if present. ``Satellites/Identification/SubhaloID_z0`` is
+    likewise sourced from the primary subhalo's own id (just an id, no
+    mass/radius-definition mismatch to worry about), falling back to the
+    Group's own ``halo_id`` otherwise. A satellite whose group has no
+    valid primary subhalo (``GroupFirstSub`` sentinel) gets NaN/-1 for
+    these subhalo-sourced fields rather than silently falling back to a
+    Group-table value that would mix mass definitions.
+
+    ``Haloes/M200c``/``R200c`` (and ``Position``/``Velocity``, already
+    covered by ``HaloTools``'s own ``centre_on_subhalo=`` opt-in)
+    deliberately stay Group-level -- those genuinely mean the host's own
+    virial mass/radius.
     """
 
     name = "halo_extract"
@@ -177,37 +188,32 @@ class HaloExtractStage(ExtractStage):
         self.satellite_rows = np.asarray(satellite_rows, dtype=np.int64)
 
     def _primary_subhalo_properties(self, halos):
-        """(mass, radius, vmax, subhalo_id, n_no_subhalo) arrays, one
-        entry per row of `halos` (the Group table), giving that group's
-        *primary subhalo*'s own mass/radius/vmax/id via ``GroupFirstSub``
-        -- NaN/-1 where the group has no valid one. `None` (all five) if
-        this catalogue has no subhalo table or no ``GroupFirstSub``
-        column (not every format/version has this split -- see this
-        class's docstring)."""
+        """(vmax, subhalo_id, n_no_subhalo), one entry per row of `halos`
+        (the Group table), giving that group's *primary subhalo*'s own
+        vmax/id via ``GroupFirstSub`` -- NaN/-1 where the group has no
+        valid one. `None` (all three) if this catalogue has no subhalo
+        table or no ``GroupFirstSub`` column (not every format/version
+        has this split -- see this class's docstring). Mass/radius are
+        deliberately not sourced here -- see this class's docstring for
+        why M200c_z0/R200c_z0 stay Group-level."""
         if not getattr(halos, "has_subhalos", False) \
                 or "GroupFirstSub" not in halos:
             return None
         subs = halos.subhalos
-        sub_mass = np.asarray(subs["mass"])
-        sub_radius = np.asarray(subs["radius"])
         sub_vmax = _first_available_field(subs, self.VMAX_CANDIDATES)
         sub_id = np.asarray(subs["halo_id"])
 
         first_sub = np.asarray(halos["GroupFirstSub"]).astype(np.int64)
         valid = (first_sub >= 0) & (first_sub < len(subs))
 
-        mass = np.full(len(halos), np.nan)
-        radius = np.full(len(halos), np.nan)
         vmax = np.full(len(halos), np.nan) if sub_vmax is not None else None
         subhalo_id = np.full(len(halos), -1, dtype=np.int64)
 
-        mass[valid] = sub_mass[first_sub[valid]]
-        radius[valid] = sub_radius[first_sub[valid]]
         if sub_vmax is not None:
             vmax[valid] = sub_vmax[first_sub[valid]]
         subhalo_id[valid] = sub_id[first_sub[valid]]
 
-        return mass, radius, vmax, subhalo_id, int(np.count_nonzero(~valid))
+        return vmax, subhalo_id, int(np.count_nonzero(~valid))
 
     def run(self, context: PipelineContext) -> PipelineContext:
         halos = self.epoch.halos
@@ -232,18 +238,17 @@ class HaloExtractStage(ExtractStage):
 
         subhalo_props = self._primary_subhalo_properties(halos)
         if subhalo_props is not None:
-            sub_mass, sub_radius, sub_vmax, sub_id, n_no_subhalo = subhalo_props
+            sub_vmax, sub_id, n_no_subhalo = subhalo_props
             if n_no_subhalo:
                 logger.warning(
                     "%s: %d/%d groups in this catalogue have no valid "
                     "primary subhalo (GroupFirstSub) -- any host/"
                     "satellite among them gets NaN/-1 for subhalo-"
-                    "sourced fields (M200c_z0/R200c_z0/Vmax_z0/"
-                    "SubhaloID_z0/Vmax_host) rather than an inconsistent "
-                    "Group-table fallback.", self.name, n_no_subhalo,
-                    len(halos))
+                    "sourced fields (Vmax_z0/SubhaloID_z0/Vmax_host) "
+                    "rather than an inconsistent Group-table fallback.",
+                    self.name, n_no_subhalo, len(halos))
         else:
-            sub_mass = sub_radius = sub_vmax = sub_id = None
+            sub_vmax = sub_id = None
 
         context.columns["Haloes/HostHaloID"] = np.asarray([halo_id[host]])
         context.columns["Haloes/M200c"] = np.asarray([mass[host]])
@@ -265,10 +270,8 @@ class HaloExtractStage(ExtractStage):
             sub_id[sats] if sub_id is not None else halo_id[sats]
         context.columns["Satellites/Identification/Snapshot"] = np.full(
             sats.size, snapnum, dtype=np.int32)
-        context.columns["Satellites/HaloProperties/M200c_z0"] = \
-            sub_mass[sats] if sub_mass is not None else mass[sats]
-        context.columns["Satellites/HaloProperties/R200c_z0"] = \
-            sub_radius[sats] if sub_radius is not None else radius[sats]
+        context.columns["Satellites/HaloProperties/M200c_z0"] = mass[sats]
+        context.columns["Satellites/HaloProperties/R200c_z0"] = radius[sats]
         sat_vmax = sub_vmax[sats] if sub_vmax is not None \
             else (vmax[sats] if vmax is not None else None)
         if sat_vmax is not None:
@@ -306,6 +309,25 @@ class TreeExtractStage(ExtractStage):
     particle resolution) get ``MergerTreeID=-1`` and a ``None`` entry in
     ``main_branch`` rather than aborting the whole stage -- flagging that
     as a QC warning belongs to ``IntegrityValidator`` (Phase 6c), not here.
+
+    Also refines ``Satellites/HaloProperties/M200c_z0``/``R200c_z0``
+    (already populated by ``HaloExtractStage`` from a fresh Group-table
+    row lookup) using the *same tree walk* that produces ``Mpeak``
+    (``HaloPropertiesStage``, Phase 6c derived stage): for SubFind trees,
+    ``treeio_subfind.walk_subfind`` resolves each tracked object's host
+    FOF group via ``TreeHalos/GroupNr``/``SubhaloNr``/
+    ``TreeFirstHaloInFOFgroup`` and stores that group's own
+    ``Group_M_Crit200``/``Group_R_Crit200`` per snapshot in
+    ``HaloTrack.extra["GroupM200"]``/``["GroupR200"]`` (earliest-to-latest
+    arrays -- the last entry is the z0 value). This is more authoritative
+    than a fresh row lookup since it's guaranteed to be the same object at
+    the same snapshot ``Mpeak`` itself came from. A satellite with no
+    resolvable tree entry, a tree file without ``Group_R_Crit200``
+    (reading it is optional -- see ``treeio_subfind.py``), or a track
+    missing ``"GroupM200"``/``"GroupR200"`` entirely, is left with
+    ``HaloExtractStage``'s Group-table value untouched -- not further
+    estimated (e.g. via a mass-to-radius rho_crit(z) conversion), since no
+    cosmology (Om0/H0(z)) is currently plumbed through to this stage.
     """
 
     name = "tree_extract"
@@ -326,26 +348,47 @@ class TreeExtractStage(ExtractStage):
         main_branch = []
         n_missing = 0
 
+        m200c_z0 = context.columns.get("Satellites/HaloProperties/M200c_z0")
+        r200c_z0 = context.columns.get("Satellites/HaloProperties/R200c_z0")
+        n_refined_mass = 0
+        n_refined_radius = 0
+
         for i, row in enumerate(rows):
             try:
-                track = self.epoch.track_of(index=int(row))
+                track_ds = self.epoch.track_of(index=int(row))
             except MergerTreeError:
                 main_branch.append(None)
                 n_missing += 1
                 continue
-            main_branch.append(track)
-            tree_ids[i] = int(track.track.halo_id)
+            main_branch.append(track_ds)
+            tree_ids[i] = int(track_ds.track.halo_id)
+
+            extra = track_ds.track.extra
+            if m200c_z0 is not None and "GroupM200" in extra:
+                m200c_z0[i] = extra["GroupM200"][-1]
+                n_refined_mass += 1
+            if r200c_z0 is not None and "GroupR200" in extra:
+                r200c_z0[i] = extra["GroupR200"][-1]
+                n_refined_radius += 1
 
         if n_missing:
             logger.warning(
                 "%s: %d/%d satellites had no resolvable tree entry "
                 "(MergerTreeID=-1, main_branch=None).",
                 self.name, n_missing, len(rows))
+        logger.info(
+            "%s: refined M200c_z0 for %d/%d and R200c_z0 for %d/%d "
+            "satellites from the tree's own resolved Group mass/radius "
+            "(Group-table lookup kept for the rest).",
+            self.name, n_refined_mass, len(rows), n_refined_radius,
+            len(rows))
 
         context.columns["Satellites/Identification/MergerTreeID"] = tree_ids
         context.columns["MergerTrees/main_branch"] = main_branch
         context.record_stage(self.name, n_satellites=len(rows),
-                             n_missing=n_missing)
+                             n_missing=n_missing,
+                             n_refined_mass=n_refined_mass,
+                             n_refined_radius=n_refined_radius)
         return context
 
 

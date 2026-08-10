@@ -379,38 +379,62 @@ condensed index.
   **bound-subhalo** mass (`SubhaloMass`). `Group_M_Crit200 >
   SubhaloMass` for the same object at the same epoch is normal, not a
   data error — the two fields were never using the same mass
-  definition. Fixed on both fronts the user asked for:
-  1. **Root cause**: `HaloExtractStage._primary_subhalo_properties()`
-     now looks up each Group row's primary subhalo via `GroupFirstSub`
-     (the same SubFind pointer already used by `HaloTools`'s
-     `centre_on_subhalo`) and sources `Satellites/HaloProperties/
-     M200c_z0`/`R200c_z0`/`Vmax_z0`, `Satellites/Identification/
-     SubhaloID_z0`, and `Haloes/Vmax_host` from the **Subhalo** table
-     when one exists — matching Mpeak's own bound-subhalo mass
-     definition. A Group with no valid `GroupFirstSub` gets NaN/-1 for
-     these fields (plus a warning naming the count), not a silent
-     fallback to the Group value that would reintroduce the same
-     inconsistency. `Haloes/M200c`/`R200c`/`Position`/`Velocity` and all
-     `Satellites/_internal/*` fields (which back `particles_in_halo`/
-     `galaxies_in_halo`/`track_of`) deliberately stay Group-level —
-     redefining what those mean has much larger blast radius (`Epoch`'s
-     core unified-interface methods hardcode the Group table with no
-     table-selection parameter) and was out of scope for this fix.
-     Catalogues without a Subhalo table, or without `GroupFirstSub`,
-     behave exactly as before. Covered by
-     `tests/test_catalogue_pipeline_halo_extract_subhalo.py` (hand-built
-     fake Group/Subhalo catalogue, no bundled SubFind fixture with a
-     real `GroupFirstSub` column exists).
-  2. **Safety margin**: `PhysicalValidator`'s `mpeak_below_m200c_z0`
-     check is downgraded from an error to a warning, since even after
-     the fix the mismatch can still legitimately arise from mass
-     definitions in other supported catalogue formats.
-  - Deferred, not yet investigated: `MergerTree.from_halo()`'s
-    `object_type="Group"` path appears to pass a Group-table row index
-    directly as a `SubhaloNr` when it internally resolves to
-    `object_type="Subhalo"` — worth checking separately, since it may
-    affect tree lookups for Group-indexed host/satellite rows. Not
-    confirmed as an actual bug yet.
+  definition. Fixed on both fronts the user asked for, in two passes
+  (the first pass's "root cause" half was itself wrong and got
+  corrected in a second pass — noted here since the mistake is
+  instructive):
+  1. **First attempt (wrong, corrected below)**: made `M200c_z0`/
+     `R200c_z0`/`Vmax_z0` all subhalo-sourced via `GroupFirstSub`, to
+     match `Mpeak`'s bound-mass definition. This mislabelled data: for
+     SubFind, the standardised `"radius"` field on the *Subhalo* table
+     maps to `SubhaloHalfmassRad` (`halo_tools_standardise_names.py`'s
+     `CATALOGUE_MAPPINGS[("SUBFIND","Subhalo")]`) — a bound half-mass
+     radius, not an R200-type quantity. Real SubFind Subhalo tables have
+     no `R_Crit200`/`M_Crit200` of their own; that's a Group-only
+     concept. So `R200c_z0` ended up silently holding a half-mass
+     radius.
+  2. **Corrected root cause**: `M200c_z0`/`R200c_z0` are read straight
+     from the satellite's own Group row again (`HaloExtractStage`,
+     `mass[sats]`/`radius[sats]` — true `Group_M_Crit200`/
+     `Group_R_Crit200`), *and* refined by `TreeExtractStage` using the
+     same tree walk that produces `Mpeak`: for SubFind trees,
+     `treeio_subfind.walk_subfind` already resolves each tracked
+     object's host FOF group via `TreeHalos/GroupNr`/`SubhaloNr`/
+     `TreeFirstHaloInFOFgroup` and stores that group's
+     `Group_M_Crit200`/`Group_R_Crit200` per snapshot in
+     `HaloTrack.extra["GroupM200"]`/`["GroupR200"]` (earliest→latest
+     arrays; the last entry is the z0 value). `TreeExtractStage`
+     overwrites `M200c_z0`/`R200c_z0` from these when a track resolves
+     and the keys are present, leaving `HaloExtractStage`'s Group-table
+     value as the fallback otherwise (no tree, unresolved satellite, or
+     a tree file that didn't carry the optional `Group_R_Crit200`
+     field). This is more authoritative than a fresh row lookup since
+     it's guaranteed to be the same object/snapshot `Mpeak` itself came
+     from. `Vmax_z0`/`Haloes/Vmax_host`/`Satellites/Identification/
+     SubhaloID_z0` stay subhalo-sourced via `GroupFirstSub` (unaffected
+     by the mislabelling — Vmax and subhalo id have no Group-level
+     analogue to conflict with in the first place). Not implemented: a
+     mass-to-radius `rho_crit(z)` estimate for `R200c_z0` when a tree
+     carries `GroupM200` but not `GroupR200` — no cosmology (Om0/H0(z))
+     is currently plumbed through to `Epoch`/`TreeExtractStage`
+     (confirmed: the only cosmology helper in the codebase is
+     `SharkModel`'s `SharkCosmology`, unrelated and not reachable from
+     here); a real follow-up if it turns out to matter in practice.
+     Covered by `tests/test_catalogue_pipeline_halo_extract_subhalo.py`
+     (Group-vs-subhalo field sourcing) and new tests in
+     `tests/test_catalogue_pipeline_extract_crossmatch.py` (the
+     tree-refinement pass, including the "no `GroupR200`" and
+     "unresolved track" fallback cases).
+  3. **Safety margin**: `PhysicalValidator`'s `mpeak_below_m200c_z0`
+     check stays downgraded from an error to a warning, since even a
+     fully correct `M200c_z0` can still legitimately be larger than
+     `Mpeak` — Group SO mass and bound-subhalo mass are different
+     physical definitions, not a data error.
+  - `MergerTree.from_halo()`'s `object_type="Group"` path was checked
+    and confirmed **not** a bug: it correctly resolves a Group id to a
+    real `SubhaloNr` via the tree's own `GroupNr`/`TreeFirstHaloInFOFgroup`
+    before using it (`get_track()`'s `_resolve_group_first_sub`) — never
+    passed through raw as if it were already a `SubhaloNr`.
 
 None of the deferred-field items above block using the pipeline today —
 they can be picked up independently whenever the relevant modelling
