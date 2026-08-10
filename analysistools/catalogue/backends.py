@@ -87,6 +87,21 @@ def rebin_sfh(native_edges: np.ndarray, native_sfr: np.ndarray,
     -------
     ndarray (n_output,)
         SFR in each output bin (Msun/yr).
+
+    Native mass at lookback times outside ``[output_edges[0],
+    output_edges[-1]]`` cannot be placed in any output bin and is
+    dropped, not folded into the nearest edge bin -- e.g. a satellite
+    whose star formation genuinely extends further back than the
+    requested grid (a common case: ``time_bin_edges``'s upper edge needs
+    to reach at least the age of the universe at z=0 for *this*
+    cosmology, not a plausible-looking round number -- see
+    ``backends._cosmic_time_gyr``) silently loses that early-formed
+    mass. Logs a warning (once per call, not per satellite) whenever
+    that drop is non-negligible, since a caller comparing the rebinned
+    SFH's integral against an independently-computed total stellar mass
+    (e.g. ``validation.PhysicalValidator``'s ``stellar_mass_exceeds_
+    formed_mass`` check) would otherwise see a silent, confusing
+    mass-conservation violation with no indication of the cause.
     """
     native_edges = np.asarray(native_edges, dtype=float)
     native_sfr = np.asarray(native_sfr, dtype=float)
@@ -105,6 +120,22 @@ def rebin_sfh(native_edges: np.ndarray, native_sfr: np.ndarray,
         frac = np.divide(overlap, native_widths,
                          out=np.zeros_like(overlap), where=native_widths > 0)
         output_mass[i] = np.sum(frac * native_mass)
+
+    total_native = float(np.sum(native_mass))
+    if total_native > 0:
+        lost_frac = (total_native - float(np.sum(output_mass))) / total_native
+        if lost_frac > 1e-6:
+            logger.warning(
+                "rebin_sfh: %.2f%% of the native-grid formed mass falls "
+                "outside output_edges=[%.3g, %.3g] (native range "
+                "[%.3g, %.3g]) and was dropped, not folded into the "
+                "nearest bin. If this is lookback time in Gyr, widen "
+                "time_bin_edges' upper bound to at least the age of the "
+                "universe at z=0 for this cosmology (see "
+                "backends._cosmic_time_gyr) if satellites' true star "
+                "formation extends further back than the requested grid.",
+                lost_frac * 100.0, output_edges[0], output_edges[-1],
+                native_edges[0], native_edges[-1])
 
     output_widths = np.diff(output_edges)
     return output_mass / output_widths

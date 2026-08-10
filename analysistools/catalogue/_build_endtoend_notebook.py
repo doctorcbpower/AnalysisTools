@@ -163,6 +163,18 @@ for the same structure as a standalone template.
     code("""
 import yaml
 
+# time_bin_edges' upper bound MUST reach at least the age of the universe
+# at z=0 for this cosmology -- a plausible-looking round number like
+# 13.5 Gyr is *not* automatically enough (this cosmology's age is
+# ~13.80 Gyr; SHARK.rebin_sfh() silently drops any native-grid formed
+# mass at lookback times beyond the requested upper edge, which then
+# makes StellarMass appear to exceed the SFH-integrated formed mass --
+# exactly the failure PhysicalValidator's stellar_mass_exceeds_formed_mass
+# check exists to catch). Derive it from the model's own cosmology
+# instead of hardcoding a guess, with a small safety margin.
+age_of_universe = shark_model.age_at_z(0.0)
+time_bin_upper_edge = age_of_universe + 0.1   # Gyr, safety margin
+
 config = {
     "schema_version": "1.0",
     "galaxy_backend": "shark",
@@ -187,7 +199,8 @@ config = {
             # yaml.safe_dump can't represent numpy scalars -- cast to
             # plain Python float, not just list(...) (which still leaves
             # each element an np.float64).
-            "time_bin_edges": [float(t) for t in np.linspace(0.0, 13.5, 14)],  # Gyr lookback
+            "time_bin_edges": [float(t) for t in
+                               np.linspace(0.0, time_bin_upper_edge, 14)],  # Gyr lookback
             "quenched_ssfr_threshold": 1.0e-11,  # 1/yr, absolute
         },
         "host_environment": {

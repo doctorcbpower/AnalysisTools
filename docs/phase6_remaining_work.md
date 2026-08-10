@@ -223,6 +223,21 @@ condensed index.
   actual HDF5 group layout (`bulges_mergers` present, unread). Fixed by
   adding `sfh_bulge_mergers`/`sfh_metals_bulge_mergers` to `SFH_FIELDS`
   and summing both channels in `sfh_bulge()`/`sfh_metals_bulge()`.
+- **`rebin_sfh()` silently dropping formed mass outside `time_bin_edges`
+  — now warns**: the fix above didn't fully close
+  `stellar_mass_exceeds_formed_mass` on a real run — the *second*
+  independent cause was `time_bin_edges`' upper bound (a plausible
+  round number, e.g. 13.5 Gyr) being narrower than the true age of the
+  universe for the project's cosmology (~13.80 Gyr for Dorcha's, per
+  `backends._cosmic_time_gyr`). `rebin_sfh()` has no way to place native
+  SFH mass at lookback times beyond the requested output grid, so it
+  was silently dropped rather than folded into the edge bin — current
+  `StellarMass` then appears to exceed the (truncated) SFH integral.
+  `rebin_sfh()` now warns (once per call, with the exact percentage
+  dropped) whenever this happens, and
+  `_build_endtoend_notebook.py`'s demo config now derives
+  `time_bin_edges`' upper bound from `shark_model.age_at_z(0.0)` (plus
+  a small safety margin) instead of a hardcoded guess.
 - **SubFind-format `epoch.halos["mass"]` is Group-level, not
   Subhalo-level — a real footgun, not a bug**: `HaloCatalogue` loads
   the FOF *Group* table into `epoch.halos` by default for SubFind

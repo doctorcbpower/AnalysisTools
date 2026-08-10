@@ -52,6 +52,37 @@ def test_rebin_output_beyond_native_range_gets_zero_contribution():
                                         output_edges), [5.0])
 
 
+def test_rebin_warns_when_native_mass_falls_outside_output_range(caplog):
+    # native covers [0,3], output only [0,2] -- the [2,3] native bin's
+    # mass (10*1=10, of a 10+10+10=30 total) is silently unplaceable.
+    native_edges = np.array([0.0, 1.0, 2.0, 3.0])
+    native_sfr = np.array([10.0, 10.0, 10.0])
+    output_edges = np.array([0.0, 2.0])
+    with caplog.at_level("WARNING"):
+        rebin_sfh(native_edges, native_sfr, output_edges)
+    assert any("dropped" in r.message for r in caplog.records)
+    assert any("33.33%" in r.message for r in caplog.records)
+
+
+def test_rebin_does_not_warn_when_native_fully_covered(caplog):
+    native_edges = np.array([0.0, 1.0, 2.0])
+    native_sfr = np.array([10.0, 20.0])
+    output_edges = np.array([0.0, 2.0])
+    with caplog.at_level("WARNING"):
+        rebin_sfh(native_edges, native_sfr, output_edges)
+    assert not any("dropped" in r.message for r in caplog.records)
+
+
+def test_rebin_does_not_warn_for_negligible_loss(caplog):
+    # loss well below the 1e-6 relative threshold
+    native_edges = np.array([0.0, 1.0, 1.0 + 1e-10])
+    native_sfr = np.array([10.0, 10.0])
+    output_edges = np.array([0.0, 1.0])
+    with caplog.at_level("WARNING"):
+        rebin_sfh(native_edges, native_sfr, output_edges)
+    assert not any("dropped" in r.message for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # SharkGalaxyBackend.star_formation_history
 # ---------------------------------------------------------------------------
