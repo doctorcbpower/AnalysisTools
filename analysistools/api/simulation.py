@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Sequence, Union
 
+import logging
+
 import numpy as np
 
 from .dataset import Dataset
@@ -35,6 +37,8 @@ from .galaxies import GalaxyCatalogue
 from .halos import HaloCatalogue
 from .snapshot import SnapshotDataset
 from .trees import MergerTree, TrackDataset
+
+logger = logging.getLogger(__name__)
 
 # component spec: prebuilt object | path | {redshift: path} | EpochModel
 Spec = Union[str, Dict[float, str], Dataset, Any, None]
@@ -225,8 +229,17 @@ class Epoch:
             centre (id_halo consistency with the N-body catalogue is not
             guaranteed). "id": match galaxies["id_halo"] == halo_id.
 
-        Note: assumes the galaxy and halo catalogues use consistent
-        length units; check meta["units"] on both when in doubt.
+        Position matching converts the halo catalogue's centre/radius/
+        boxsize into SHARK's own fixed native convention (comoving
+        Mpc/h -- see GalaxyCatalogue's meta["units"]) before the search,
+        using the halo catalogue's own meta["comoving"]/["little_h"]/
+        ["h0"]/["scale_factor"] -- the halo catalogue can be loaded in
+        *any* comoving/little_h state (the default is comoving, h-free,
+        which does *not* match SHARK's h-included convention) and this
+        still matches correctly. If the halo catalogue has no HubbleParam
+        available, no h correction can be applied and a warning is
+        logged -- position matching may then silently find zero (or the
+        wrong) galaxies whenever the two catalogues' conventions differ.
         """
         gals = self.galaxies
         if gals is None:
@@ -246,12 +259,49 @@ class Epoch:
         if cat is None:
             raise ValueError("Position matching requires a halo catalogue.")
         row = self._halo_row(halo_id, index)
-        centre = np.asarray(cat["pos"])[row]
-        radius = float(np.asarray(cat["radius"])[row]) * r_scale
-        idx = match_positions(gals["pos"], centre, radius, self.boxsize)
+        length_factor = self._length_factor_to_shark_native(cat)
+        centre = np.asarray(cat["pos"])[row] * length_factor
+        radius = float(np.asarray(cat["radius"])[row]) * r_scale * length_factor
+        boxsize = cat.meta.get("boxsize")
+        boxsize = boxsize * length_factor if boxsize is not None \
+            else self.boxsize
+        idx = match_positions(gals["pos"], centre, radius, boxsize)
         view = gals.select(mask=idx)
         view.label = f"{gals.label}:halo{cat['halo_id'][row]}"
         return view
+
+    @staticmethod
+    def _length_factor_to_shark_native(cat: HaloCatalogue) -> float:
+        """Multiplicative factor converting a length (position/radius/
+        boxsize) from `cat`'s own comoving/little_h convention into
+        SHARK's fixed native convention (comoving Mpc/h). ``1.0`` (no
+        correction, with a warning) if `cat` has no HubbleParam to
+        convert with -- see ``galaxies_in_halo``'s docstring."""
+        cat.preload()  # meta isn't populated until first load
+        h = cat.meta.get("h0")
+        if not h:
+            logger.warning(
+                "galaxies_in_halo(): halo catalogue has no HubbleParam "
+                "(meta['h0']) -- cannot convert to SHARK's native "
+                "comoving Mpc/h convention. Position matching will be "
+                "wrong (likely finding zero galaxies) if the halo "
+                "catalogue's actual comoving/little_h state differs "
+                "from SHARK's.")
+            return 1.0
+        factor = 1.0
+        if not cat.meta.get("little_h"):
+            factor *= h                        # h-free -> h-included
+        if not cat.meta.get("comoving"):
+            a = cat.meta.get("scale_factor")
+            if a:
+                factor /= a                     # physical -> comoving
+            else:
+                logger.warning(
+                    "galaxies_in_halo(): halo catalogue is physical "
+                    "(comoving=False) but has no scale_factor -- cannot "
+                    "convert to SHARK's comoving convention; only the "
+                    "little_h correction is applied.")
+        return factor
 
     def track_of(self, halo_id: Optional[int] = None, *,
                  index: Optional[int] = None,

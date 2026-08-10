@@ -373,6 +373,19 @@ class CrossMatchStage(PipelineStage):
                     context.columns[
                         f"Satellites/GalaxyProperties/{field}"] = values
                 n_galaxy_matched = sum(1 for p in per_satellite if p)
+                if n_galaxy_matched == 0:
+                    logger.warning(
+                        "%s: galaxy_backend matched 0/%d satellites -- no "
+                        "Satellites/GalaxyProperties/* columns were "
+                        "created at all, which will make any later stage "
+                        "requiring them (e.g. StarFormationHistoryStage) "
+                        "fail with a confusing 'missing required inputs' "
+                        "error instead of this one. For SharkGalaxyBackend "
+                        "with match_by='position' (the default), a common "
+                        "cause is the halo catalogue's comoving/little_h "
+                        "state not matching SHARK's native convention -- "
+                        "see Epoch.galaxies_in_halo's docstring.",
+                        self.name, n)
 
                 if hasattr(self.galaxy_backend, "native_comoving_little_h"):
                     comoving, little_h = \

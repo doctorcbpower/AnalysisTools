@@ -131,13 +131,26 @@ def test_particles_in_halo_groupid_unavailable():
 
 @pytest.fixture
 def sim_with_galaxies(tmp_path):
+    from analysistools.api.simulation import Epoch
+
     cat = at.load(VRCAT, snapnum=31, native_includes_h=False)
+    cat.preload()
+    # galaxies_in_halo() now converts the halo catalogue's centre/radius
+    # into SHARK's fixed native convention (comoving Mpc/h) before
+    # matching (see Epoch.galaxies_in_halo's docstring) -- this
+    # catalogue is comoving but h-free (little_h=False), so that's a
+    # real, non-trivial (h~0.7) conversion, not a no-op. Plant the
+    # synthetic galaxies in that same converted frame so the fixture
+    # exercises the real matching path instead of accidentally only
+    # working because no conversion used to be applied at all.
+    length_factor = Epoch._length_factor_to_shark_native(cat)
+
     n_halos = 5
     per_halo = 4
     rng = np.random.default_rng(1)
     rows = np.argsort(np.asarray(cat["mass"]))[-n_halos:]
-    centres = np.asarray(cat["pos"])[rows]
-    radii = np.asarray(cat["radius"])[rows]
+    centres = np.asarray(cat["pos"])[rows] * length_factor
+    radii = np.asarray(cat["radius"])[rows] * length_factor
     ids = np.asarray(cat["halo_id"])[rows]
 
     pos, id_halo = [], []
@@ -161,7 +174,8 @@ def sim_with_galaxies(tmp_path):
         g.create_dataset("id_galaxy", data=np.arange(n, dtype=np.int64))
         g.create_dataset("id_halo", data=np.array(id_halo, dtype=np.int64))
         g.create_dataset("type", data=np.zeros(n, dtype=np.int32))
-        f.create_dataset("cosmology/h", data=0.6751)
+        # matches the halo catalogue's own h0 -- same simulation, same h
+        f.create_dataset("cosmology/h", data=float(cat.meta["h0"]))
         f.create_dataset("run_info/redshift", data=0.0)
 
     sim = make_sim(galaxies={0.0: str(path)})
@@ -185,6 +199,129 @@ def test_galaxies_in_halo_by_id(sim_with_galaxies):
     found = epoch.galaxies_in_halo(int(ids[-1]), match_by="id")
     assert len(found) == 4                          # exactly as planted
     assert np.all(found["id_halo"] == ids[-1])
+
+
+@needs_data
+def test_galaxies_in_halo_finds_nothing_if_planted_in_uncorrected_frame(
+        tmp_path):
+    # regression test for the bug this session's fix closed: planting
+    # synthetic galaxies directly at the halo catalogue's own (h-free)
+    # pos/radius, i.e. *not* converted into SHARK's native comoving-Mpc/h
+    # convention, must now correctly find zero matches -- the old code
+    # silently found them anyway because it never converted units at all.
+    cat = at.load(VRCAT, snapnum=31, native_includes_h=False)
+    rows = np.argsort(np.asarray(cat["mass"]))[-1:]
+    centre = np.asarray(cat["pos"])[rows][0]     # deliberately uncorrected
+    radius = float(np.asarray(cat["radius"])[rows][0])
+    hid = int(np.asarray(cat["halo_id"])[rows][0])
+
+    rng = np.random.default_rng(2)
+    pos = centre + rng.normal(0, 0.2 * radius, (4, 3))
+
+    path = tmp_path / "galaxies.hdf5"
+    with h5py.File(path, "w") as f:
+        g = f.create_group("galaxies")
+        g.create_dataset("position_x", data=pos[:, 0])
+        g.create_dataset("position_y", data=pos[:, 1])
+        g.create_dataset("position_z", data=pos[:, 2])
+        for name in ("velocity_x", "velocity_y", "velocity_z"):
+            g.create_dataset(name, data=rng.normal(0, 100, 4))
+        g.create_dataset("mstars_disk", data=rng.lognormal(22, 1, 4))
+        g.create_dataset("mstars_bulge", data=rng.lognormal(21, 1, 4))
+        g.create_dataset("id_galaxy", data=np.arange(4, dtype=np.int64))
+        g.create_dataset("id_halo", data=np.full(4, hid, dtype=np.int64))
+        g.create_dataset("type", data=np.zeros(4, dtype=np.int32))
+        f.create_dataset("cosmology/h", data=0.703)
+        f.create_dataset("run_info/redshift", data=0.0)
+
+    sim = make_sim(galaxies={0.0: str(path)})
+    found = sim.at(0.0).galaxies_in_halo(index=int(rows[0]))
+    assert len(found) == 0
+
+
+def test_length_factor_to_shark_native_h_free_comoving():
+    from analysistools.api.simulation import Epoch
+
+    class _FakeCat:
+        meta = {"h0": 0.7, "comoving": True, "little_h": False}
+        def preload(self):
+            pass
+
+    assert Epoch._length_factor_to_shark_native(_FakeCat()) == \
+        pytest.approx(0.7)
+
+
+def test_length_factor_to_shark_native_already_matches_shark():
+    from analysistools.api.simulation import Epoch
+
+    class _FakeCat:
+        meta = {"h0": 0.7, "comoving": True, "little_h": True}
+        def preload(self):
+            pass
+
+    assert Epoch._length_factor_to_shark_native(_FakeCat()) == \
+        pytest.approx(1.0)
+
+
+def test_length_factor_to_shark_native_physical_to_comoving():
+    from analysistools.api.simulation import Epoch
+
+    class _FakeCat:
+        meta = {"h0": 0.7, "comoving": False, "little_h": True,
+               "scale_factor": 0.5}
+        def preload(self):
+            pass
+
+    # physical -> comoving: divide by a=0.5 -> factor 2.0
+    assert Epoch._length_factor_to_shark_native(_FakeCat()) == \
+        pytest.approx(2.0)
+
+
+def test_length_factor_to_shark_native_physical_and_h_free():
+    from analysistools.api.simulation import Epoch
+
+    class _FakeCat:
+        meta = {"h0": 0.7, "comoving": False, "little_h": False,
+               "scale_factor": 0.5}
+        def preload(self):
+            pass
+
+    # h-free -> h-included (*0.7) and physical -> comoving (/0.5) -> 1.4
+    assert Epoch._length_factor_to_shark_native(_FakeCat()) == \
+        pytest.approx(1.4)
+
+
+def test_length_factor_to_shark_native_no_hubble_param_warns_and_no_ops(
+        caplog):
+    from analysistools.api.simulation import Epoch
+
+    class _FakeCat:
+        meta = {"h0": None, "comoving": True, "little_h": False}
+        def preload(self):
+            pass
+
+    with caplog.at_level("WARNING"):
+        factor = Epoch._length_factor_to_shark_native(_FakeCat())
+    assert factor == 1.0
+    assert any("no HubbleParam" in r.message for r in caplog.records)
+
+
+def test_length_factor_to_shark_native_physical_no_scale_factor_warns(
+        caplog):
+    from analysistools.api.simulation import Epoch
+
+    class _FakeCat:
+        meta = {"h0": 0.7, "comoving": False, "little_h": True,
+               "scale_factor": None}
+        def preload(self):
+            pass
+
+    with caplog.at_level("WARNING"):
+        factor = Epoch._length_factor_to_shark_native(_FakeCat())
+    # h correction still applied (little_h already True here -> no-op);
+    # only the missing comoving correction is skipped, with a warning.
+    assert factor == pytest.approx(1.0)
+    assert any("no scale_factor" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

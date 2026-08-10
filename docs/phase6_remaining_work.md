@@ -181,6 +181,27 @@ condensed index.
   field-by-field mapping.
 
 ### Cross-cutting
+- **`Epoch.galaxies_in_halo(match_by="position")` unit bug — now fixed**:
+  it compared the halo catalogue's centre/radius directly against SHARK
+  galaxy positions without accounting for either catalogue's actual
+  comoving/little_h convention. SHARK's `GalaxyCatalogue` always stores
+  comoving Mpc/h (fixed, native); the halo catalogue defaults to
+  comoving *h-free* Mpc (`HaloCatalogue`'s own `comoving=True,
+  little_h=False` defaults) — a real, silent ~1/h mismatch for any
+  project using those defaults (found via a real end-to-end run: every
+  satellite matched zero SHARK galaxies, `CrossMatchStage` created no
+  `Satellites/GalaxyProperties/*` columns at all, and
+  `StarFormationHistoryStage` then failed several stages later with a
+  confusing "missing required inputs" error rather than anything
+  pointing at the real cause). Fixed by `Epoch.
+  _length_factor_to_shark_native()`, which converts centre/radius/
+  boxsize into SHARK's convention using the halo catalogue's own
+  `meta["h0"]`/`["comoving"]`/`["little_h"]`/`["scale_factor"]` before
+  matching; logs a clear warning (rather than silently mismatching) if
+  the halo catalogue has no `HubbleParam` to convert with.
+  `CrossMatchStage` also now warns explicitly whenever a `galaxy_backend`
+  matches zero satellites, so this class of failure surfaces immediately
+  instead of downstream.
 - **`SatelliteID` stability**: assigned per-build by
   `_concatenate_contexts` (globally, across every `HostJob`), not
   guaranteed stable across independent catalogue rebuilds (e.g. if the

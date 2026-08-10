@@ -343,6 +343,31 @@ def test_galaxy_properties_missing_fields_become_nan(
 
 
 @needs_data
+def test_zero_galaxy_matches_warns_clearly(
+        epoch, host_and_satellite_rows, caplog):
+    # every satellite's galaxy_properties() returns {} -- no
+    # Satellites/GalaxyProperties/* columns get created at all, which
+    # would otherwise surface much later as a confusing "missing
+    # required inputs" error from a downstream stage instead of here,
+    # where the actual cause is known.
+    host_row, satellite_rows = host_and_satellite_rows
+    backend = _FakeGalaxyBackend({})  # empty dict for every row
+
+    context = HaloExtractStage(epoch, host_row, satellite_rows).run(
+        PipelineContext())
+    with caplog.at_level("WARNING"):
+        result = CrossMatchStage(galaxy_backend=backend, epoch=epoch).run(
+            context)
+
+    cross_match_entry = next(
+        p for p in result.provenance if p["stage"] == "cross_match")
+    assert cross_match_entry["n_galaxy_matched"] == 0
+    assert any("matched 0/" in r.message for r in caplog.records)
+    assert not any(k.startswith("Satellites/GalaxyProperties/")
+                   for k in result.columns)
+
+
+@needs_data
 def test_galaxy_backend_without_epoch_warns_and_skips(
         epoch, host_and_satellite_rows, caplog):
     host_row, satellite_rows = host_and_satellite_rows
