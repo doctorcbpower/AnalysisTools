@@ -55,11 +55,13 @@ def six_particle_snapshot():
     # them (_read_particle_data_single_file).
     gas_metallicity = np.array([0.01, 0.02, 0.03])       # rows 0, 2, 4
     gas_sfr = np.array([1.0, 2.0, 3.0])                  # rows 0, 2, 4
+    gas_dust_mass = np.array([1e-5, 2e-5, 3e-5])         # rows 0, 2, 4
     stellar_metallicity = np.array([0.5, 0.6])           # rows 1, 3
     stellarage = np.array([0.1, 0.2])                    # rows 1, 3
     stellarinitmass = np.array([100.0, 200.0])           # rows 1, 3
     return dict(ptype=ptype, gas_metallicity=gas_metallicity,
-               gas_sfr=gas_sfr, stellar_metallicity=stellar_metallicity,
+               gas_sfr=gas_sfr, gas_dust_mass=gas_dust_mass,
+               stellar_metallicity=stellar_metallicity,
                stellarage=stellarage, stellarinitmass=stellarinitmass)
 
 
@@ -117,6 +119,23 @@ def test_write_and_read_back_star_formation_rate_gated_on_gas_type(
     np.testing.assert_allclose(sfr, [3.0, 2.0, 1.0])  # rows 4, 2, 0
 
 
+def test_write_and_read_back_dust_mass_gated_on_gas_type(
+        tmp_path, six_particle_snapshot):
+    idx = np.arange(6)[::-1]
+    idx_type = six_particle_snapshot["ptype"][idx]
+    writer = _make_writer(idx, idx_type, **six_particle_snapshot)
+
+    out = str(tmp_path / "snap")
+    writer.write_hdf5_snapshot(out)
+
+    with h5py.File(out + ".hdf5", "r") as f:
+        assert "DustMass" in f["PartType0"]      # gas group -- correct gating
+        assert "DustMass" not in f["PartType4"]  # not the star group
+        dust_mass = f["PartType0/DustMass"][()]
+
+    np.testing.assert_allclose(dust_mass, [3e-5, 2e-5, 1e-5])  # rows 4, 2, 0
+
+
 def test_write_and_read_back_stellar_age_and_init_mass(
         tmp_path, six_particle_snapshot):
     idx = np.arange(6)[::-1]
@@ -148,7 +167,9 @@ def test_identity_idx_still_correct(tmp_path, six_particle_snapshot):
         gas_z = f["PartType0/Metallicity"][()]
         star_z = f["PartType4/Metallicity"][()]
         sfr = f["PartType0/StarFormationRate"][()]
+        dust_mass = f["PartType0/DustMass"][()]
 
     np.testing.assert_allclose(gas_z, [0.01, 0.02, 0.03])
     np.testing.assert_allclose(star_z, [0.5, 0.6])
     np.testing.assert_allclose(sfr, [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(dust_mass, [1e-5, 2e-5, 3e-5])

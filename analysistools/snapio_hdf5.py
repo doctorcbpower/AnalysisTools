@@ -208,6 +208,9 @@ class read_hdf5:
             if 'SFR' in self.extra_blocks:
                 self.gas_sfr = np.ndarray(shape=(self.num_part_total[self.gas_type]))
                 extra_flags['issfr'] = True
+            if 'DUST' in self.extra_blocks:
+                self.gas_dust_mass = np.ndarray(shape=(self.num_part_total[self.gas_type]))
+                extra_flags['isdustmass'] = True
             if 'STELLARGENS' in self.extra_blocks:
                 self.stellargen = np.ndarray(shape=(self.num_part_total[self.star_type]), dtype=np.int32)
                 extra_flags['isstellargens'] = True
@@ -367,6 +370,9 @@ class read_hdf5:
 
         if extra_flags.get('issfr', False):
             self.gas_sfr[istart:ifinish] = f['PartType%d/StarFormationRate' % itype][()]
+
+        if extra_flags.get('isdustmass', False):
+            self.gas_dust_mass[istart:ifinish] = f['PartType%d/DustMass' % itype][()]
 
         return jstart
 
@@ -578,6 +584,8 @@ class write_hdf5:
                     self._write_metallicities(group, i, mask, metallicity_type='stellar')
                 if getattr(self,'gas_sfr',None) is not None and i==getattr(self,'gas_type',0):
                     self._write_star_formation_rates(group, i, mask)
+                if getattr(self,'gas_dust_mass',None) is not None and i==getattr(self,'gas_type',0):
+                    self._write_dust_masses(group, i, mask)
                 if getattr(self,'stellarage',None) is not None and i==getattr(self,'star_type',4):
                     self._write_stellar_ages(group, i, mask)
                 if getattr(self,'stellarinitmass',None) is not None and i==getattr(self,'star_type',4):
@@ -676,7 +684,7 @@ class write_hdf5:
         """
         For a species-only array (sized to just that species' particle
         count -- e.g. gas-only ``u``/``rho``/``hsml``/``gas_metallicity``/
-        ``gas_sfr``, or star-only ``stellar_metallicity``/``stellarage``/
+        ``gas_sfr``/``gas_dust_mass``, or star-only ``stellar_metallicity``/``stellarage``/
         ``stellarinitmass``, see ``_allocate_extra_block_memory``),
         convert ``self.idx[mask]`` (indices into the full, un-reordered
         particle arrays like ``pos``/``mass`` -- valid for those, but not
@@ -753,6 +761,18 @@ class write_hdf5:
             "CGSConversionFactor": self.unit_sfr_in_cgs,
             "aexp-scale-exponent": 0,
             "h-scale-exponent": 0,
+        })
+
+    def _write_dust_masses(self, group, i, mask):
+        idx_i = self._species_local_idx(mask, getattr(self, 'gas_type', 0))
+        data_dust = group.create_dataset(
+            'DustMass',
+            data=self.gas_dust_mass[idx_i],
+        )
+        data_dust.attrs.update({
+            "CGSConversionFactor": self.unit_mass_in_cgs,
+            "aexp-scale-exponent": 0,
+            "h-scale-exponent": -1,
         })
 
     def _write_stellar_ages(self, group, i, mask):
