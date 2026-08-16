@@ -283,11 +283,139 @@ class GriddingTools:
 
         return grid
             
+    @staticmethod
+    def _collapse(grid_3d, grid_limits, slice_axis='z', slice_index=None,
+                  slice_width=None, slice_average=True, mode='projection',
+                  projection='mean', normalize_by_area=False):
+        """
+        Shared collapse logic for plot_3d_slice/plot_3d_projections/
+        plot_ratio_projections: reduces a 3D grid to a 2D (data, extent,
+        xlabel, ylabel, title_str) along one axis, either a thin slice or a
+        full projection (mean/sum/max).
+
+        normalize_by_area (only meaningful with projection='sum'): divides
+        the summed data by the physical area of one pixel in the two
+        surviving axes -- turns a per-column *total* (e.g. total mass in a
+        column, code mass units) into a per-unit-area *density* (mass per
+        unit area, in [input mass units] / [input grid_limits units]^2).
+        Callers wanting a specific physical unit (e.g. Msun/pc^2) should
+        pre-scale the values passed into smooth_to_grid accordingly (see
+        GriddingTools docstring / calling code) -- this method has no
+        notion of physical units itself, only of the numbers it's given.
+        """
+        nx, ny, nz = grid_3d.shape
+
+        if mode == 'slice':
+            if slice_axis == 'z':
+                n = nz
+                if slice_index is None:
+                    slice_index = n // 2
+                if slice_width is None:
+                    slice_width = 1
+                start_idx = max(slice_index - slice_width // 2, 0)
+                end_idx = min(slice_index + slice_width // 2 + 1, n)
+                sub = grid_3d[:, :, start_idx:end_idx]
+                data = sub.mean(axis=2) if slice_average else sub.sum(axis=2)
+                extent = [grid_limits[0], grid_limits[1], grid_limits[2], grid_limits[3]]
+                xlabel, ylabel, title_str = 'X', 'Y', f'XY slice (Z={slice_index})'
+
+            elif slice_axis == 'y':
+                n = ny
+                if slice_index is None:
+                    slice_index = n // 2
+                if slice_width is None:
+                    slice_width = 1
+                start_idx = max(slice_index - slice_width // 2, 0)
+                end_idx = min(slice_index + slice_width // 2 + 1, n)
+                sub = grid_3d[:, start_idx:end_idx, :]
+                data = sub.mean(axis=1) if slice_average else sub.sum(axis=1)
+                extent = [grid_limits[0], grid_limits[1], grid_limits[4], grid_limits[5]]
+                xlabel, ylabel, title_str = 'X', 'Z', f'XZ slice (Y={slice_index})'
+
+            elif slice_axis == 'x':
+                n = nx
+                if slice_index is None:
+                    slice_index = n // 2
+                if slice_width is None:
+                    slice_width = 1
+                start_idx = max(slice_index - slice_width // 2, 0)
+                end_idx = min(slice_index + slice_width // 2 + 1, n)
+                sub = grid_3d[start_idx:end_idx, :, :]
+                data = sub.mean(axis=0) if slice_average else sub.sum(axis=0)
+                extent = [grid_limits[2], grid_limits[3], grid_limits[4], grid_limits[5]]
+                xlabel, ylabel, title_str = 'Y', 'Z', f'YZ slice (X={slice_index})'
+
+            else:
+                raise ValueError("slice_axis must be 'x', 'y', or 'z'")
+
+        elif mode == 'projection':
+            collapse_axis = {'z': 2, 'y': 1, 'x': 0}.get(slice_axis)
+            if collapse_axis is None:
+                raise ValueError("slice_axis must be 'x', 'y', or 'z'")
+
+            if projection == 'mean':
+                data = grid_3d.mean(axis=collapse_axis)
+            elif projection == 'sum':
+                data = grid_3d.sum(axis=collapse_axis)
+            elif projection == 'max':
+                data = grid_3d.max(axis=collapse_axis)
+            else:
+                raise ValueError("projection must be 'mean', 'sum', or 'max'")
+
+            if slice_axis == 'z':
+                extent = [grid_limits[0], grid_limits[1], grid_limits[2], grid_limits[3]]
+                xlabel, ylabel, title_str = 'X', 'Y', f'XY projection ({projection} along Z)'
+            elif slice_axis == 'y':
+                extent = [grid_limits[0], grid_limits[1], grid_limits[4], grid_limits[5]]
+                xlabel, ylabel, title_str = 'X', 'Z', f'XZ projection ({projection} along Y)'
+            else:
+                extent = [grid_limits[2], grid_limits[3], grid_limits[4], grid_limits[5]]
+                xlabel, ylabel, title_str = 'Y', 'Z', f'YZ projection ({projection} along X)'
+
+            if normalize_by_area:
+                pixel_area = ((extent[1] - extent[0]) / data.shape[0]) * \
+                             ((extent[3] - extent[2]) / data.shape[1])
+                data = data / pixel_area
+
+        else:
+            raise ValueError("mode must be 'slice' or 'projection'")
+
+        return data, extent, xlabel, ylabel, title_str
+
+    @staticmethod
+    def _plot_panel(ax, data, extent, xlabel, ylabel, title_str, cmap='viridis',
+                     vmin=None, vmax=None, log=True):
+        """Shared imshow + colorbar for a single (already-collapsed) 2D panel."""
+        with np.errstate(divide='ignore', invalid='ignore'):
+            plotted = np.log10(data.T) if log else data.T
+        im = ax.imshow(plotted, origin='lower', extent=extent, cmap=cmap,
+                        aspect='auto', vmin=vmin, vmax=vmax)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title_str)
+        return im
+
+    @staticmethod
+    def _shared_clim(data_list, log=True):
+        """Finite-value min/max across several panels' data, for a colour
+        scale shared across all of them by default (rather than each panel
+        auto-scaling independently, which makes the panels incomparable)."""
+        with np.errstate(divide='ignore', invalid='ignore'):
+            all_vals = np.concatenate([
+                (np.log10(d) if log else d).ravel() for d in data_list
+            ])
+        finite = all_vals[np.isfinite(all_vals)]
+        if finite.size == 0:
+            return None, None
+        return float(finite.min()), float(finite.max())
+
     def plot_3d_slice(self, grid_3d, grid_limits,
                  slice_axis='z', slice_index=None,
                  slice_width=None, slice_average=True,
                  mode='slice', projection='mean',
-                 title="3D Grid Slice", cmap='viridis', figsize=(12, 4)):
+                 title="3D Grid Slice", cmap='viridis', figsize=(12, 4),
+                 vmin=None, vmax=None, normalize_by_area=False,
+                 cbar_label=None):
         """
         Visualize 3D grid by showing orthogonal slices or projections.
 
@@ -304,125 +432,35 @@ class GriddingTools:
         slice_width : int, optional
             Thickness of slice (used if mode='slice'). Defaults to 1.
         slice_average : bool, optional
-            Sum or average over cells in slice (used if mode='slice'). Defaults to average.            
+            Sum or average over cells in slice (used if mode='slice'). Defaults to average.
         mode : str, optional
             'slice' = single slice at slice_index
             'projection' = collapse along slice_axis
         projection : str, optional
             If mode='projection', how to collapse: 'mean', 'sum', 'max'
+        vmin, vmax : float, optional
+            Fixed log10-scale colour limits. Default: matplotlib auto-scales
+            to this panel's own data range.
+        normalize_by_area : bool, optional
+            With mode='projection', projection='sum': divide the summed
+            column total by pixel area, turning it into a density. See
+            _collapse's docstring. Default: False (raw sum).
+        cbar_label : str, optional
+            Colorbar label (e.g. units).
         """
-        nx, ny, nz = grid_3d.shape
+        data, extent, xlabel, ylabel, title_str = self._collapse(
+            grid_3d, grid_limits, slice_axis=slice_axis, slice_index=slice_index,
+            slice_width=slice_width, slice_average=slice_average, mode=mode,
+            projection=projection, normalize_by_area=normalize_by_area,
+        )
 
-        # Handle mode
-        if mode == 'slice':
-            if slice_axis == 'z':
-                if slice_index is None:
-                    slice_index = nz // 2
-    
-                if slice_width is None:
-                    slice_width = 1  # e.g., 1 cell thick; can make this a function argument
-
-                # Compute start/end indices safely
-                start_idx = max(slice_index - slice_width//2, 0)
-                end_idx = min(slice_index + slice_width//2 + 1, nz)
-
-                # Extract thin slice (average or sum over the thickness)
-                if slice_average is True:
-                    data = grid_3d[:, :, start_idx:end_idx].mean(axis=2)
-                else:
-                    data = grid_3d[:, :, start_idx:end_idx].sum(axis=2)
-                    
-                extent = [grid_limits[0], grid_limits[1], grid_limits[2], grid_limits[3]]
-                xlabel, ylabel, title_str = 'X', 'Y', f'XY slice (Z={slice_index})'
-
-            elif slice_axis == 'y':
-                if slice_index is None:
-                    slice_index = ny // 2
-
-                if slice_width is None:
-                    slice_width = 1  # e.g., 1 cells thick; can make this a function argument
-
-                # Compute start/end indices safely
-                start_idx = max(slice_index - slice_width//2, 0)
-                end_idx = min(slice_index + slice_width//2 + 1, ny)
-
-                # Extract thin slice (average or sum over the thickness)
-                if slice_average is True:
-                    data = grid_3d[:, start_idx:end_idx, :].mean(axis=1)
-                else:
-                    data = grid_3d[:, start_idx:end_idx, :].sum(axis=1)
-                    
-                extent = [grid_limits[0], grid_limits[1], grid_limits[4], grid_limits[5]]
-                xlabel, ylabel, title_str = 'X', 'Z', f'XZ slice (Y={slice_index})'
-
-            elif slice_axis == 'x':
-                if slice_index is None:
-                    slice_index = nx // 2
-
-                if slice_width is None:
-                    slice_width = 1  # e.g., 3 cells thick; can make this a function argument
-
-                # Compute start/end indices safely
-                start_idx = max(slice_index - slice_width//2, 0)
-                end_idx = min(slice_index + slice_width//2 + 1, nx)
-
-                # Extract thin slice (average or sum over the thickness)
-                if slice_average is True:
-                    data = grid_3d[start_idx:end_idx, :, :].mean(axis=0)
-                else:
-                    data = grid_3d[start_idx:end_idx, :, :].sum(axis=0)
-                    
-                extent = [grid_limits[2], grid_limits[3], grid_limits[4], grid_limits[5]]
-                xlabel, ylabel, title_str = 'Y', 'Z', f'YZ slice (X={slice_index})'
-
-            else:
-                raise ValueError("slice_axis must be 'x', 'y', or 'z'")
-
-        elif mode == 'projection':
-            if slice_axis == 'z':
-                if projection == 'mean':
-                    data = grid_3d.mean(axis=2)
-                elif projection == 'sum':
-                    data = grid_3d.sum(axis=2)
-                elif projection == 'max':
-                    data = grid_3d.max(axis=2)
-                extent = [grid_limits[0], grid_limits[1], grid_limits[2], grid_limits[3]]
-                xlabel, ylabel, title_str = 'X', 'Y', f'XY projection ({projection} along Z)'
-
-            elif slice_axis == 'y':
-                if projection == 'mean':
-                    data = grid_3d.mean(axis=1)
-                elif projection == 'sum':
-                    data = grid_3d.sum(axis=1)
-                elif projection == 'max':
-                    data = grid_3d.max(axis=1)
-                extent = [grid_limits[0], grid_limits[1], grid_limits[4], grid_limits[5]]
-                xlabel, ylabel, title_str = 'X', 'Z', f'XZ projection ({projection} along Y)'
-
-            elif slice_axis == 'x':
-                if projection == 'mean':
-                    data = grid_3d.mean(axis=0)
-                elif projection == 'sum':
-                    data = grid_3d.sum(axis=0)
-                elif projection == 'max':
-                    data = grid_3d.max(axis=0)
-                extent = [grid_limits[2], grid_limits[3], grid_limits[4], grid_limits[5]]
-                xlabel, ylabel, title_str = 'Y', 'Z', f'YZ projection ({projection} along X)'
-
-            else:
-                raise ValueError("slice_axis must be 'x', 'y', or 'z'")
-
-        else:
-            raise ValueError("mode must be 'slice' or 'projection'")
-
-        # Plot
         fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(np.log10(data.T), origin='lower', extent=extent, cmap=cmap, aspect='auto')
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title_str)
+        im = self._plot_panel(ax, data, extent, xlabel, ylabel, title_str,
+                               cmap=cmap, vmin=vmin, vmax=vmax)
         fig.suptitle(title, fontsize=14)
-        plt.colorbar(im, ax=ax)
+        cbar = plt.colorbar(im, ax=ax)
+        if cbar_label is not None:
+            cbar.set_label(cbar_label)
         plt.tight_layout()
         return fig, ax
 
@@ -430,10 +468,12 @@ class GriddingTools:
                             mode='projection', projection='sum',
                             cmap='viridis', figsize=(12, 4), title=None,
                             slice_axis='z', slice_index=None,
-                            slice_width=None, slice_average=True,):
+                            slice_width=None, slice_average=True,
+                            vmin=None, vmax=None, normalize_by_area=False,
+                            cbar_label=None):
         """
-        Wrapper to plot a row of 3 orthogonal projections (XY, XZ, YZ)
-        by calling plot_3d_slice for each axis.
+        Plot a row of 3 orthogonal projections (XY, XZ, YZ) of the same
+        3D grid.
 
         Parameters
         ----------
@@ -455,6 +495,18 @@ class GriddingTools:
             Thickness of slice (used if mode='slice'). Defaults to 1.
         slice_average : bool, optional
             Sum or average over cells in slice (used if mode='slice'). Defaults to average.
+        vmin, vmax : float, optional
+            Fixed log10-scale colour limits shared by all three panels.
+            Default: computed from the combined finite data range across
+            all three panels, so they share one scale by default (unlike
+            each panel auto-scaling independently, which makes side-by-side
+            panels visually incomparable).
+        normalize_by_area : bool, optional
+            With projection='sum': divide each panel's summed column total
+            by its own pixel area, turning a raw sum into a density. See
+            GriddingTools._collapse's docstring for units caveats.
+        cbar_label : str, optional
+            Shared colorbar label (e.g. units) for all three panels.
 
         Returns
         -------
@@ -463,40 +515,101 @@ class GriddingTools:
         """
         fig, axes = plt.subplots(1, 3, figsize=figsize)
 
-        for ax, axis, lbl in zip(
-            axes,
-            ['z', 'y', 'x'],
-            ['XY', 'XZ', 'YZ']
-        ):
-            # Handle slice_index per axis
-            idx = None
-            if mode == 'slice' and slice_index is not None:
-                if isinstance(slice_index, dict):
-                    idx = slice_index.get(axis, None)
-                else:
-                    idx = slice_index
-        
-            # Call your existing slice function in projection mode
-            _, single_ax = self.plot_3d_slice(
-                grid_3d, grid_limits,
-                slice_axis=axis,
-                mode=mode,
-                projection=projection,
-                cmap=cmap,
-                figsize=(5, 5)  # ignored, since we reuse fig/ax
-            )
+        axis_labels = ['z', 'y', 'x']
+        panels = []
+        for axis in axis_labels:
+            idx = slice_index
+            if mode == 'slice' and isinstance(slice_index, dict):
+                idx = slice_index.get(axis, None)
+            panels.append(self._collapse(
+                grid_3d, grid_limits, slice_axis=axis, slice_index=idx,
+                slice_width=slice_width, slice_average=slice_average, mode=mode,
+                projection=projection, normalize_by_area=normalize_by_area,
+            ))
 
-            # Transfer the image from the returned ax to our chosen subplot
-            im = single_ax.images[0]
-            ax.imshow(im.get_array(), origin='lower',
-                      extent=im.get_extent(),
-                      cmap=im.get_cmap() if hasattr(im, 'get_cmap') else cmap,
-                      aspect='auto')  # set aspect manually
-            ax.set_title(lbl)
-            ax.set_xlabel(single_ax.get_xlabel())
-            ax.set_ylabel(single_ax.get_ylabel())
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            plt.close(single_ax.figure)  # avoid extra figures popping up
+        if vmin is None or vmax is None:
+            auto_vmin, auto_vmax = self._shared_clim([p[0] for p in panels])
+            vmin = auto_vmin if vmin is None else vmin
+            vmax = auto_vmax if vmax is None else vmax
+
+        im = None
+        for ax, lbl, (data, extent, xlabel, ylabel, _) in zip(axes, ['XY', 'XZ', 'YZ'], panels):
+            im = self._plot_panel(ax, data, extent, xlabel, ylabel, lbl,
+                                   cmap=cmap, vmin=vmin, vmax=vmax)
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            if cbar_label is not None:
+                cbar.set_label(cbar_label)
+
+        if title:
+            fig.suptitle(title, fontsize=14)
+
+        plt.tight_layout()
+        return fig, axes
+
+    def plot_ratio_projections(self, numerator_3d, denominator_3d, grid_limits,
+                               projection='sum', cmap='viridis', figsize=(12, 4),
+                               title=None, vmin=None, vmax=None,
+                               min_denominator=0.0, cbar_label=None):
+        """
+        Plot a row of 3 orthogonal projections of the ratio of two 3D
+        grids built on the same grid_size/grid_limits (e.g. dust mass /
+        gas mass, for a dust-to-gas-ratio map) -- collapses each grid with
+        `projection` independently, then divides, so numerator and
+        denominator are each properly summed (or averaged) before the
+        ratio is taken, not divided cell-by-cell before projection.
+
+        Any mass-unit/area-normalization factor cancels in the ratio, so
+        (unlike plot_3d_projections) there's no normalize_by_area option
+        here -- the two grids just need to share units with each other,
+        not represent any particular physical unit.
+
+        Parameters
+        ----------
+        numerator_3d, denominator_3d : ndarray
+            3D grids of the same shape (e.g. from two smooth_to_grid calls
+            with the same grid_size/grid_limits).
+        min_denominator : float, optional
+            Columns whose collapsed denominator is <= this are masked to
+            NaN (not plotted) rather than producing a divide-by-zero
+            artifact. Default: 0.0 (mask exact zeros only).
+        (see plot_3d_projections for the remaining parameters)
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        axes : list of matplotlib.axes.Axes
+        """
+        if numerator_3d.shape != denominator_3d.shape:
+            raise ValueError("numerator_3d and denominator_3d must have the same shape")
+
+        fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+        axis_labels = ['z', 'y', 'x']
+        panels = []
+        for axis in axis_labels:
+            num, extent, xlabel, ylabel, _ = self._collapse(
+                numerator_3d, grid_limits, slice_axis=axis, mode='projection',
+                projection=projection,
+            )
+            den, _, _, _, _ = self._collapse(
+                denominator_3d, grid_limits, slice_axis=axis, mode='projection',
+                projection=projection,
+            )
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ratio = np.where(den > min_denominator, num / den, np.nan)
+            panels.append((ratio, extent, xlabel, ylabel))
+
+        if vmin is None or vmax is None:
+            auto_vmin, auto_vmax = self._shared_clim([p[0] for p in panels])
+            vmin = auto_vmin if vmin is None else vmin
+            vmax = auto_vmax if vmax is None else vmax
+
+        for ax, lbl, (data, extent, xlabel, ylabel) in zip(axes, ['XY', 'XZ', 'YZ'], panels):
+            im = self._plot_panel(ax, data, extent, xlabel, ylabel, lbl,
+                                   cmap=cmap, vmin=vmin, vmax=vmax)
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            if cbar_label is not None:
+                cbar.set_label(cbar_label)
 
         if title:
             fig.suptitle(title, fontsize=14)
