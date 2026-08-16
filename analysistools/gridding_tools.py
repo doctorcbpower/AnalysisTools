@@ -71,6 +71,109 @@ def _cic_assign_3d(grid, coords, values, Nx, Ny, Nz):
         grid[(i+1) % Nx, (j+1) % Ny, (k+1) % Nz] += values[p] * fx*fy*fz
 
 
+@njit
+def _cubic_spline_kernel(q):
+    """Normalized 3D cubic spline (Monaghan & Lattanzio 1985), compact
+    support out to q=2. Caller supplies the 1/(pi h^3) normalization by
+    construction of the deposit weights (see _sph_assign_3d) -- this
+    returns the dimensionless shape function only."""
+    if q < 1.0:
+        return 1.0 - 1.5 * q * q + 0.75 * q * q * q
+    elif q < 2.0:
+        t = 2.0 - q
+        return 0.25 * t * t * t
+    else:
+        return 0.0
+
+
+@njit
+def _sph_assign_3d(grid, pos, values, h, xmin, ymin, zmin, dx, dy, dz, Nx, Ny, Nz):
+    """
+    Per-particle SPH-kernel deposition onto a 3D grid, using each
+    particle's own smoothing length `h` (compact-support cubic spline,
+    support radius 2h) rather than one global smoothing scale applied to
+    every particle alike.
+
+    Works entirely in physical coordinates (not grid-index units), so it
+    is correct for anisotropic grid spacing (dx != dy != dz, e.g. a
+    thinner z-extent than x/y). Non-periodic: kernel support is clipped
+    to the grid, not wrapped (unlike _ngp_assign_3d/_cic_assign_3d), since
+    this targets isolated (non-cosmological) galaxy examples.
+
+    Each particle's deposited weights are renormalized to sum to exactly
+    `values[p]` (computed in a first pass over its own affected cells,
+    then applied in a second pass) -- this is what keeps a particle's
+    contribution mass-conserving regardless of whether its own h happens
+    to be small or large relative to the grid spacing, which a single
+    global smoothing scale cannot do (see the CIC+Gaussian gap/blob
+    artifact this method replaces). A particle whose kernel support
+    doesn't overlap any cell centre (h << spacing) falls back to
+    nearest-grid-point deposition so its value is never silently dropped.
+    """
+    n = pos.shape[0]
+    for p in range(n):
+        hp = h[p]
+        x, y, z = pos[p, 0], pos[p, 1], pos[p, 2]
+
+        if hp <= 0.0:
+            i = int(np.floor((x - xmin) / dx))
+            j = int(np.floor((y - ymin) / dy))
+            k = int(np.floor((z - zmin) / dz))
+            if 0 <= i < Nx and 0 <= j < Ny and 0 <= k < Nz:
+                grid[i, j, k] += values[p]
+            continue
+
+        rmax = 2.0 * hp
+        imin = max(int(np.floor((x - xmin - rmax) / dx)), 0)
+        imax = min(int(np.ceil((x - xmin + rmax) / dx)), Nx - 1)
+        jmin = max(int(np.floor((y - ymin - rmax) / dy)), 0)
+        jmax = min(int(np.ceil((y - ymin + rmax) / dy)), Ny - 1)
+        kmin = max(int(np.floor((z - zmin - rmax) / dz)), 0)
+        kmax = min(int(np.ceil((z - zmin + rmax) / dz)), Nz - 1)
+
+        if imin > imax or jmin > jmax or kmin > kmax:
+            continue
+
+        wsum = 0.0
+        for i in range(imin, imax + 1):
+            cx = xmin + (i + 0.5) * dx
+            ddx = cx - x
+            for j in range(jmin, jmax + 1):
+                cy = ymin + (j + 0.5) * dy
+                ddy = cy - y
+                for k in range(kmin, kmax + 1):
+                    cz = zmin + (k + 0.5) * dz
+                    ddz = cz - z
+                    r = np.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+                    q = r / hp
+                    if q < 2.0:
+                        wsum += _cubic_spline_kernel(q)
+
+        if wsum <= 0.0:
+            i = int(np.floor((x - xmin) / dx))
+            j = int(np.floor((y - ymin) / dy))
+            k = int(np.floor((z - zmin) / dz))
+            if 0 <= i < Nx and 0 <= j < Ny and 0 <= k < Nz:
+                grid[i, j, k] += values[p]
+            continue
+
+        v = values[p]
+        for i in range(imin, imax + 1):
+            cx = xmin + (i + 0.5) * dx
+            ddx = cx - x
+            for j in range(jmin, jmax + 1):
+                cy = ymin + (j + 0.5) * dy
+                ddy = cy - y
+                for k in range(kmin, kmax + 1):
+                    cz = zmin + (k + 0.5) * dz
+                    ddz = cz - z
+                    r = np.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+                    q = r / hp
+                    if q < 2.0:
+                        w = _cubic_spline_kernel(q)
+                        grid[i, j, k] += v * (w / wsum)
+
+
 class GriddingTools:
     def __init__(self):
         pass
@@ -97,9 +200,28 @@ class GriddingTools:
         else:
             _cic_assign_2d(grid, coords, values, gs[0], gs[1])
 
+    @staticmethod
+    def sph_assign(grid, positions, values, smoothing_lengths, grid_limits, grid_size):
+        """
+        Per-particle SPH-kernel (cubic spline) deposition onto a 3D grid,
+        using each particle's own smoothing length rather than a single
+        global smoothing scale. See _sph_assign_3d for the deposition
+        details (mass-conserving per particle, non-periodic, correct for
+        anisotropic grid spacing). 3D only -- unlike ngp_assign/cic_assign,
+        there is no 2D variant (no current caller needs one).
+        """
+        if grid.ndim != 3:
+            raise ValueError("sph_assign only supports 3D grids")
+        dx = (grid_limits[1] - grid_limits[0]) / grid_size[0]
+        dy = (grid_limits[3] - grid_limits[2]) / grid_size[1]
+        dz = (grid_limits[5] - grid_limits[4]) / grid_size[2]
+        _sph_assign_3d(grid, positions, values, smoothing_lengths,
+                        grid_limits[0], grid_limits[2], grid_limits[4],
+                        dx, dy, dz, grid_size[0], grid_size[1], grid_size[2])
 
     def smooth_to_grid(self, positions, values, grid_size, grid_limits,
-                       method="NGP", sigma=1.0, filter_sigma=None):
+                       method="NGP", sigma=1.0, filter_sigma=None,
+                       smoothing_lengths=None):
         """
         Assign particle values to a 2D or 3D grid.
 
@@ -108,9 +230,16 @@ class GriddingTools:
             values (ndarray): (N,) array of particle values.
             grid_size (tuple): Grid shape (Nx, Ny[, Nz]).
             grid_limits (tuple): (xmin, xmax, ymin, ymax[, zmin, zmax]).
-            method (str): "NGP", "CIC", or "Gaussian".
-            sigma (float): Gaussian width (for 'Gaussian' method).
+            method (str): "NGP", "CIC", "Gaussian", or "SPH".
+            sigma (float): Gaussian width in grid cells (for 'Gaussian' method).
             filter_sigma (float): Optional Gaussian smoothing of final grid.
+            smoothing_lengths (ndarray): (N,) array of per-particle physical
+                smoothing lengths, same units as `positions`/`grid_limits`.
+                Required for method="SPH" -- e.g. each cell's own effective
+                radius (3*Volume/(4*pi))**(1/3) for a Voronoi/moving-mesh
+                code, where a single global Gaussian sigma either
+                over-smooths dense regions or under-samples (leaves
+                particle-scale gaps in) sparse ones.
 
         Returns:
             ndarray: Grid of assigned values.
@@ -120,8 +249,20 @@ class GriddingTools:
         # numba-jitted assigners need an ndarray (tuple indexing is
         # branch-checked statically and fails for 2D input)
         grid_size = np.asarray(grid_size, dtype=np.int64)
+
+        if method.upper() == "SPH":
+            if smoothing_lengths is None:
+                raise ValueError("method='SPH' requires smoothing_lengths")
+            if dim != 3:
+                raise ValueError("method='SPH' only supports 3D grids")
+            self.sph_assign(grid, positions, values, smoothing_lengths,
+                             grid_limits, grid_size)
+            if filter_sigma is not None:
+                grid = gaussian_filter(grid, sigma=filter_sigma)
+            return grid
+
         # Grid spacing
-        spacing = [(grid_limits[2*i+1] - grid_limits[2*i]) / grid_size[i] 
+        spacing = [(grid_limits[2*i+1] - grid_limits[2*i]) / grid_size[i]
                    for i in range(dim)]
 
         # Normalized coordinates in [0, grid_size)
