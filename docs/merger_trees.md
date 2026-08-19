@@ -32,12 +32,17 @@ Same two independent axes as [`HaloTools`](halo_catalogues.md) (see [unified_int
 
 Two format-specific wrinkles worth knowing:
 
-- **SubFind-HBT stores `SubhaloPos`/`SubhaloVel` *physical*, not comoving** -- the one exception to the usual "everything is comoving on disk" rule. `comoving=True` (default) correctly converts it *to* comoving (divides by the scale factor, per snapshot); `comoving=False` leaves it physical. This was already handled correctly before this split existed -- it's preserved, not new.
+- **SubFind-HBT's native comoving/physical convention is a guess, not a guarantee** -- the default (`TREE_NATIVE_IS_COMOVING["SubFind"] = False`, i.e. assumed physical) matches some GADGET-4 HBT+ runs, but was verified **wrong** for DORCHA_01: comparing `TreeHalos/SubhaloPos`/`SubhaloVel`/`SubhaloMass` at a non-z=0 snapshot against that same snapshot's own `fof_subhalo_tab` catalogue showed them byte-identical, i.e. the tree is an unconverted copy of the (comoving) snapshot catalogue, not already-physical. Pass `native_is_comoving=` explicitly once you've checked your own tree file (or its source snapshot) rather than trusting the default -- the same caveat as TreeFrog's little-h guess below.
 - **TreeFrog's little-h convention is a guess, like `HaloTools`' VELOCIraptor entry** -- and until this was split out, TreeFrog's `comoving` flag actually did `pos * HubbleParam / a` in one expression, conflating both axes (and very likely applying h in the wrong direction for h-included-native data). That's fixed now, but the underlying ambiguity about TreeFrog's *native* little-h convention remains: pass `native_includes_h=` explicitly once you've checked your tree file (or its source snapshot) rather than trusting the default.
 
 ```python
 mt = MergerTreeTools("VELOCIraptor.tree.hdf5", treefileformat="TreeFrog",
                       comoving=True, little_h=False, native_includes_h=False)
+
+# SubFind-HBT tree whose comoving/physical convention you've verified
+# directly (see above) rather than trusting the per-format default:
+mt = MergerTreeTools("gadget4_hbt.tree.hdf5", treefileformat="SubFind",
+                      comoving=True, native_is_comoving=True)
 ```
 
 `little_h`/`native_includes_h` no-op (with a warning) wherever `HubbleParam` isn't available -- currently TreeFrog walkable trees (topology only, no properties at all) and AHF (no properties of its own either).

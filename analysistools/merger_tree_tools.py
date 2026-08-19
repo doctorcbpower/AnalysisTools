@@ -117,10 +117,18 @@ TREE_NATIVE_INCLUDES_LITTLE_H = {
 }
 
 # Whether each tree format's raw pos/vel are stored *comoving* (the general
-# simulation-output convention) or *physical*. SubFind-HBT is the one
-# exception: GADGET-4's HBT+ tree output stores SubhaloPos/SubhaloVel
-# physical, unlike the comoving convention its own group/subhalo catalogues
-# use -- this is a real, format-specific quirk, not a guess.
+# simulation-output convention) or *physical*. SubFind-HBT's entry here is
+# only a common-case guess, not a guarantee: verified directly against
+# DORCHA_01 (comparing TreeHalos/SubhaloPos, SubhaloVel, SubhaloMass at a
+# non-z=0 snapshot against that same snapshot's own fof_subhalo_tab
+# catalogue) that its tree file is an *unconverted copy* of the (comoving)
+# snapshot catalogue -- i.e. comoving, not physical, contradicting the
+# False below. Some other SubFind-HBT run may genuinely store physical
+# values (this default was not invented from nothing), so the default is
+# left as-is rather than flipped -- verify against your own tree file (or
+# its source snapshot) and pass native_is_comoving= explicitly once you've
+# checked, the same way native_includes_h= overrides
+# TREE_NATIVE_INCLUDES_LITTLE_H.
 TREE_NATIVE_IS_COMOVING = {
     "SubFind": False,
     "TreeFrog": True,
@@ -146,9 +154,14 @@ class MergerTreeTools:
       ensures pos/vel are comoving; comoving=False converts to physical.
       Whether that's a no-op or a real conversion depends on the *format's*
       native convention (TREE_NATIVE_IS_COMOVING) -- TreeFrog/AHF store
-      comoving natively (matching group catalogues), but SubFind-HBT is a
-      genuine exception: GADGET-4's HBT+ tree output stores SubhaloPos/
-      SubhaloVel physical, not comoving.
+      comoving natively (matching group catalogues). SubFind-HBT's default
+      (physical) is only a common-case guess, not a guarantee -- verified
+      wrong for at least DORCHA_01 (its tree file is an unconverted,
+      still-comoving copy of the snapshot catalogue; see
+      TREE_NATIVE_IS_COMOVING's comment). Pass native_is_comoving=
+      explicitly once you've verified your own tree file's actual
+      convention, the same way native_includes_h= overrides the little-h
+      guess below.
     - little-h (whether Mpc/h-family or Mpc-family): *not* the same axis as
       the above -- see HaloTools' docstring for why the two must not be
       conflated (the same mistake existed in this module's TreeFrog reader
@@ -177,6 +190,10 @@ class MergerTreeTools:
     native_includes_h : bool, optional
         Override TREE_NATIVE_INCLUDES_LITTLE_H's per-format guess. Strongly
         recommended for TreeFrog -- see above.
+    native_is_comoving : bool, optional
+        Override TREE_NATIVE_IS_COMOVING's per-format guess. Strongly
+        recommended for SubFind-HBT -- verified wrong (comoving, not
+        physical) for at least DORCHA_01; see above.
     halo_tools : HaloTools, optional
         A linked catalogue reader, enabling `from_halo()` and (for AHF)
         per-snapshot property lookups.
@@ -191,6 +208,7 @@ class MergerTreeTools:
         comoving: bool = True,
         little_h: bool = False,
         native_includes_h: Optional[bool] = None,
+        native_is_comoving: Optional[bool] = None,
         halo_tools: Optional["object"] = None,
         **kwargs,
     ):
@@ -203,6 +221,7 @@ class MergerTreeTools:
         self.comoving = comoving
         self.little_h = little_h
         self.native_includes_h = native_includes_h
+        self.native_is_comoving = native_is_comoving
         self.halo_tools = halo_tools
 
         self.metadata: Dict[str, Any] = {}
@@ -292,7 +311,9 @@ class MergerTreeTools:
         d = self.data
         length_h_factor, mass_h_factor = self._length_and_mass_h_factors()
 
-        native_is_comoving = TREE_NATIVE_IS_COMOVING.get(self.treefileformat, True)
+        native_is_comoving = (
+            self.native_is_comoving if self.native_is_comoving is not None
+            else TREE_NATIVE_IS_COMOVING.get(self.treefileformat, True))
         a_row = np.asarray(d.Time)[np.asarray(d.SnapNum)]  # per-row scale factor
         if native_is_comoving:
             # raw is comoving; comoving=False converts to physical (*a)
@@ -326,7 +347,9 @@ class MergerTreeTools:
             return  # walkable tree: topology only, nothing to convert
 
         length_h_factor, mass_h_factor = self._length_and_mass_h_factors()
-        native_is_comoving = TREE_NATIVE_IS_COMOVING.get(self.treefileformat, True)
+        native_is_comoving = (
+            self.native_is_comoving if self.native_is_comoving is not None
+            else TREE_NATIVE_IS_COMOVING.get(self.treefileformat, True))
 
         for group, snapnum in d.snap_of_group.items():
             a = d.Time[snapnum]

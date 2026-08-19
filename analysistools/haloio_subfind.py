@@ -43,7 +43,7 @@ def read_subfind(filename: str) -> Tuple[Dict[str, Any], Dict[str, np.ndarray], 
             "OmegaDM": params.get("Omega_cdm"),
             "OmegaB": params.get("Omega_b"),
             "OmegaLambda": params.get("OmegaLambda"),
-            "Redshift": params.get("Redshift"), 
+            "Redshift": header.get("Redshift", params.get("Redshift")),
             "TotNgroups": header.get("Ngroups_Total"),
             "TotNsubgroups": header.get("Nsubgroups_Total", header.get("Nsubhalos_Total")),
         }
