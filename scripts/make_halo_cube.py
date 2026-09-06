@@ -146,6 +146,30 @@ def other_epochs_from_snapnums(
     ]
 
 
+def _parse_snapnum_token(token: str) -> list[int]:
+    """One --other-snapnums token -> a list of snapshot numbers. Either a
+    plain integer ('80' -> [80]), or an inclusive range 'START-END'
+    ('50-100' -> [50, 51, ..., 100]) with an optional ':STEP' suffix
+    ('50-100:5' -> [50, 55, ..., 100]; also works descending, e.g.
+    '100-50:5' -> [100, 95, ..., 50]). A leading '-' on a plain negative
+    number (snapshot numbers are never negative in practice, but just in
+    case) is not treated as a range dash -- only a '-' with digits on
+    both sides is.
+    """
+    import re
+    m = re.fullmatch(r"(\d+)-(\d+)(?::(\d+))?", token)
+    if not m:
+        return [int(token)]
+    start, end, step_str = int(m.group(1)), int(m.group(2)), m.group(3)
+    step = int(step_str) if step_str else 1
+    if step <= 0:
+        raise argparse.ArgumentTypeError(
+            f"--other-snapnums range step must be positive: {token!r}")
+    if start <= end:
+        return list(range(start, end + 1, step))
+    return list(range(start, end - 1, -step))
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Extract a spherical, halo-centred DM cutout from a "
@@ -178,12 +202,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                             "--halo-id has more than one value.")
 
     other = p.add_argument_group("other (traced) epochs")
-    other.add_argument("--other-snapnums", type=int, nargs="*",
+    other.add_argument("--other-snapnums", type=_parse_snapnum_token, nargs="*",
                         default=DEFAULT_OTHER_SNAPNUMS,
                         help="Snapshot numbers to trace the reference "
-                             "halo's particle IDs through. Empty (pass "
-                             "--other-snapnums with nothing after it) to "
-                             "skip this stage entirely.")
+                             "halo's particle IDs through. Each token is "
+                             "either a single number (80) or an inclusive "
+                             "range (50-100, or 50-100:5 for a step of "
+                             "5) -- mix freely, e.g. --other-snapnums 40 "
+                             "50-100:10 121. Empty (pass --other-snapnums "
+                             "with nothing after it) to skip this stage "
+                             "entirely.")
     other.add_argument("--other-dir", default=DEFAULT_OTHER_DIR,
                         help="Directory containing the other-epoch "
                              "snapshots (all must follow the same naming "
@@ -222,7 +250,20 @@ def parse_args(argv=None) -> argparse.Namespace:
                             "position/velocity rather than the raw FOF "
                             "GroupPos/GroupVel.")
 
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+
+    # --other-snapnums' `type` runs per-token, so a mix of plain numbers
+    # and ranges parses to a list of (int | list[int]) -- flatten it, and
+    # dedupe (preserving first-seen order) in case ranges/numbers overlap.
+    # The default (DEFAULT_OTHER_SNAPNUMS, used verbatim when the flag is
+    # absent) is already a flat list of ints, so this is a no-op for it.
+    flat: list[int] = []
+    for item in args.other_snapnums:
+        flat.extend(item) if isinstance(item, list) else flat.append(item)
+    seen: set[int] = set()
+    args.other_snapnums = [n for n in flat if not (n in seen or seen.add(n))]
+
+    return args
 
 
 def build_dm_subhaloid_array(catalogue_file: str, n_dm: int,
