@@ -145,12 +145,10 @@ class read_hdf5:
         num_part_in_mass_block = np.sum(self.num_part_total[idx_with_mass])
         if num_part_in_mass_block > 0:
             print(f"Number of particles in mass block: {num_part_in_mass_block}")
-        
-        if getattr(self,'hires_only',False):
-            hires_particles = (self.num_part_total[self.gas_type] +
-                             self.num_part_total[self.dm_type] +
-                             self.num_part_total[self.star_type] +
-                             self.num_part_total[self.bh_type])
+        if getattr(self, 'hires_only', False):
+            hires_types = [t for t in range(self.num_type)
+                           if t not in self.not_hires_ptypes]
+            hires_particles = int(np.sum(self.num_part_total[hires_types]))
             print(f"Number of HIRES particles: {hires_particles}")
 
     def _allocate_memory(self, num_part):
