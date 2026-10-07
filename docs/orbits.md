@@ -117,7 +117,7 @@ depending on whether it is applied now or at peak.
   pericentre since infall; NaN until the first one), `OrbitalApocentre`
   (latest confirmed apocentre), `OrbitalEccentricity`, `OrbitalPeriod`
   (measured), `OrbitalEnergy`, `OrbitalAngularMomentum` (at infall).
-* Schema **1.1** (additive) adds 23 `Orbit*` columns (`extended_fields=True`),
+* Schema **1.1** (additive) adds 31 `Orbit*` columns (`extended_fields=True`),
   generated from `orbits/catalogue_fields.py`.
 * `HaloPropertiesStage`'s `Minfall`/`RedshiftInfall`/`NumberOfInfalls`/
   `IsBacksplash` remain **FOF-membership** based (first `IsSubhalo`), although
