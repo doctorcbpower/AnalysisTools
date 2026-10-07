@@ -18,6 +18,7 @@ from . import gridding_tools
 from . import render_tools
 from . import fdm_field_tools
 from . import halo_model
+from . import orbits
 
 # --- public class imports ---
 from .snapshot_tools import SnapshotTools
@@ -62,6 +63,7 @@ __all__ = [
     "render_tools",
     "fdm_field_tools",
     "halo_model",
+    "orbits",
     "api",
     # unified interface
     "load",

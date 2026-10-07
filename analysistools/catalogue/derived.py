@@ -137,40 +137,34 @@ class HaloPropertiesStage(PipelineStage):
 
 
 class OrbitalPropertiesStage(PipelineStage):
-    """OrbitalPericentre/OrbitalApocentre/OrbitalEccentricity and
-    OrbitalAngularMomentum (at infall) -- computed from each satellite's
-    orbit relative to the host, via ``MergerTreeTools.analyse_orbit()``.
+    """Orbit-derived satellite columns, fed by ``analysistools.orbits``.
 
-    Needs the host's own tree track, which ``TreeExtractStage`` doesn't
-    produce (it only tracks satellites) -- built here directly from
-    ``(epoch, host_row)``, matching ``HaloExtractStage``'s convention of
-    taking host/satellite selection explicitly rather than guessing it.
+    This stage no longer measures orbits itself. It takes an
+    ``OrbitCatalogue`` (the standalone orbit tool's sidecar -- built once,
+    cached, reusable across papers) or an ``OrbitTracker`` it runs on the
+    host's tree track and the satellites' ``MergerTrees/main_branch``
+    tracks, and maps the result into catalogue columns (see
+    ``orbits.catalogue_fields`` for the exact mapping and definitions).
 
-    "At infall" uses the satellite's own ``IsSubhalo``-based
-    ``HaloTrack.infall_snapshot()`` -- the same definition
-    ``HaloPropertiesStage`` uses -- rather than
-    ``OrbitAnalysis.first_crossing()``'s R200-based one. That's a deliberate
-    choice: the host's virial radius isn't reliably on the tree's `extra`
-    for every format (SubFind-HBT carries it as "GroupR200"; a TreeFrog
-    track built from a linked halo catalogue, as ``TreeExtractStage``
-    produces for the walkable-tree case, carries no radius field at all).
+    Exactly one of ``orbit_catalogue`` / ``tracker`` / ``tracker_options``
+    must be given. There is deliberately no default: the earlier
+    implementation (pericentre/apocentre as min/max of the *snapshot-sampled*
+    host distance over the whole tree overlap, in whatever comoving/h unit
+    the tree reader happened to produce) over-estimated pericentres,
+    reported the pre-infall maximum distance as "apocentre", and mixed
+    scale factors -- so a silent fallback to it would be a silent wrong
+    answer. ``tracker_options`` is the config-file route: a dict with
+    ``length_kpc`` and ``mass_msun`` (the size of the tracks' length/mass
+    units -- *must be checked against your tree*, nothing is guessed) and
+    optionally ``potential`` ("tree_nfw" or None), ``velocity``,
+    ``cosmology`` ({h, omega_m}; default: read from a SubFind tree) and any
+    ``orbits.OrbitConfig`` field (``radius_key``, ``radius_factor``,
+    ``hysteresis``, ...).
 
-    Deliberately **not** computed here -- each needs an assumed physical
-    model this pipeline doesn't specify anywhere, so guessing one would
-    silently bake in an unstated assumption:
-
-    - ``OrbitalEnergy``: needs a host potential model (point-mass? NFW?),
-      not just kinematics.
-    - ``OrbitalPeriod``: needs either a potential model, or multiple fully
-      resolved pericentre passages in the snapshot cadence, which isn't
-      guaranteed.
-    - ``TidalTrackClass``: needs a full tidal-tracks classification model
-      (e.g. Penarrubia et al. tables) -- a different kind of model
-      entirely, out of scope for orbit kinematics alone.
-
-    These three are left out of ``outputs``/uncomputed here; a future
-    stage (or this one, once a modelling choice is made and documented)
-    should add them rather than have this stage guess.
+    Satellites are matched to sidecar rows by ``track.halo_id``.
+    ``extended_fields=True`` additionally writes the ``Orbit*`` columns of
+    schema 1.1 (a 1.0 schema has no slot for them, and
+    ``QualityControlStage`` rejects undeclared columns, hence the switch).
     """
 
     name = "orbital_properties"
@@ -178,13 +172,40 @@ class OrbitalPropertiesStage(PipelineStage):
     outputs = ("Satellites/HaloProperties/OrbitalPericentre",
                "Satellites/HaloProperties/OrbitalApocentre",
                "Satellites/HaloProperties/OrbitalEccentricity",
-               "Satellites/HaloProperties/OrbitalAngularMomentum")
+               "Satellites/HaloProperties/OrbitalAngularMomentum",
+               "Satellites/HaloProperties/OrbitalPeriod",
+               "Satellites/HaloProperties/OrbitalEnergy")
 
-    def __init__(self, epoch, host_row: int):
+    def __init__(self, epoch, host_row: int, orbit_catalogue=None,
+                 tracker=None, tracker_options=None,
+                 extended_fields: bool = False):
+        given = [x is not None for x in (orbit_catalogue, tracker,
+                                          tracker_options)]
+        if sum(given) != 1:
+            raise ValueError(
+                "OrbitalPropertiesStage needs exactly one of orbit_catalogue "
+                "(a sidecar path/OrbitCatalogue from analysistools.orbits), "
+                "tracker (an OrbitTracker) or tracker_options (dict, see the "
+                "class docstring). There is no default: orbit definitions and "
+                "the tracks' unit system must be stated explicitly.")
+        from ..orbits.catalogue_fields import (EXTENDED_FIELD_MAP, GROUP,
+                                               LEGACY_FIELD_MAP)
         self.epoch = epoch
         self.host_row = int(host_row)
+        self.orbit_catalogue = orbit_catalogue
+        self.tracker = tracker
+        self.tracker_options = tracker_options
+        self._field_map = dict(LEGACY_FIELD_MAP)
+        if extended_fields:
+            self._field_map.update(EXTENDED_FIELD_MAP)
+        self.outputs = tuple(f"{GROUP}/{c}" for c in self._field_map)
 
-    def run(self, context):
+    def _orbit_catalogue_for(self, main_branch):
+        from ..orbits import OrbitCatalogue, OrbitTracker
+        if self.orbit_catalogue is not None:
+            cat = self.orbit_catalogue
+            return OrbitCatalogue.read_hdf5(cat) if isinstance(cat, str) \
+                else cat
         if self.epoch.tree is None:
             raise RuntimeError(
                 f"Stage '{self.name}': this Epoch has no merger tree.")
@@ -195,69 +216,60 @@ class OrbitalPropertiesStage(PipelineStage):
                 f"Stage '{self.name}': host halo (row {self.host_row}) has "
                 f"no resolvable tree entry, so no satellite orbit can be "
                 f"computed relative to it.") from exc
+        tracker = self.tracker
+        if tracker is None:
+            tracker = OrbitTracker.from_epoch(
+                self.epoch, host_track, **self.tracker_options)
+        tracks, ids = [], []
+        for ds in main_branch:
+            ok = ds is not None and len(ds.track) > 0
+            tracks.append(ds.track if ok else None)
+            ids.append(ds.track.halo_id if ok else -1)
+        return tracker.run(tracks, host_track, ids=ids)
 
-        analyse_orbit = self.epoch.tree.backend.analyse_orbit
-        boxsize = self.epoch.boxsize
-
+    def run(self, context):
+        from ..orbits.tracker import SCALARS
         main_branch = context.columns["MergerTrees/main_branch"]
         n = len(main_branch)
+        cat = self._orbit_catalogue_for(main_branch)
+        row_of = {int(i): k for k, i in enumerate(cat.ids)}
 
-        pericentre = np.full(n, np.nan)
-        apocentre = np.full(n, np.nan)
-        eccentricity = np.full(n, np.nan)
-        angular_momentum = np.full((n, 3), np.nan)
-
-        n_no_track = n_no_overlap = 0
-        for i, track_ds in enumerate(main_branch):
-            if track_ds is None or len(track_ds.track) == 0:
+        rows = np.full(n, -1, dtype=np.int64)
+        n_no_track = n_not_in_sidecar = 0
+        for i, ds in enumerate(main_branch):
+            if ds is None or len(ds.track) == 0:
                 n_no_track += 1
                 continue
-            track = track_ds.track
-
-            try:
-                orbit = analyse_orbit(track, host_track, boxsize=boxsize)
-            except MergerTreeError:
-                n_no_overlap += 1
+            k = row_of.get(int(ds.track.halo_id))
+            if k is None:
+                n_not_in_sidecar += 1
                 continue
+            rows[i] = k
+        have = rows >= 0
 
-            peri = float(np.min(orbit.Distance))
-            apo = float(np.max(orbit.Distance))
-            pericentre[i] = peri
-            apocentre[i] = apo
-            if (peri + apo) > 0:
-                eccentricity[i] = (apo - peri) / (apo + peri)
+        for col, key in self._field_map.items():
+            dtype, fill, _, _ = SCALARS[key]
+            src = cat.scalar(key)
+            shape = (n,) + src.shape[1:]
+            out = np.full(shape, fill, dtype=src.dtype)
+            out[have] = src[rows[have]]
+            context.columns[f"Satellites/HaloProperties/{col}"] = out
 
-            event = track.infall_snapshot()
-            if event is not None:
-                infall_snap = track.SnapNum[event["index"]]
-                match_self = np.flatnonzero(track.SnapNum == infall_snap)
-                match_host = np.flatnonzero(host_track.SnapNum == infall_snap)
-                if match_self.size and match_host.size:
-                    i_s, i_h = int(match_self[0]), int(match_host[0])
-                    dpos = periodic_delta(
-                        track.Pos[i_s] - host_track.Pos[i_h], boxsize)
-                    dvel = track.Vel[i_s] - host_track.Vel[i_h]
-                    angular_momentum[i] = np.cross(dpos, dvel)
-
-        if n_no_track or n_no_overlap:
+        n_orph = int(np.sum(cat.scalar("is_orphan_final")[rows[have]])) \
+            if have.any() else 0
+        if n_no_track or n_not_in_sidecar:
             logger.warning(
                 "%s: %d/%d satellites skipped (%d no resolved tree entry, "
-                "%d no snapshot overlap with the host's track).",
-                self.name, n_no_track + n_no_overlap, n, n_no_track,
-                n_no_overlap)
-
-        context.columns["Satellites/HaloProperties/OrbitalPericentre"] = \
-            pericentre
-        context.columns["Satellites/HaloProperties/OrbitalApocentre"] = \
-            apocentre
-        context.columns["Satellites/HaloProperties/OrbitalEccentricity"] = \
-            eccentricity
-        context.columns["Satellites/HaloProperties/OrbitalAngularMomentum"] = \
-            angular_momentum
-
-        context.record_stage(self.name, n_satellites=n,
-                             n_no_track=n_no_track,
-                             n_no_overlap=n_no_overlap)
+                "%d not present in the orbit sidecar).", self.name,
+                n_no_track + n_not_in_sidecar, n, n_no_track, n_not_in_sidecar)
+        md = cat.metadata
+        context.record_stage(
+            self.name, n_satellites=n, n_no_track=n_no_track,
+            n_not_in_sidecar=n_not_in_sidecar, n_orphan_final=n_orph,
+            orbit_sidecar_version=str(md.get("sidecar_version", "")),
+            orbit_potential=str(md.get("potential", "")),
+            orbit_radius_key=str(md.get("config_radius_key", "")),
+            orbit_radius_factor=str(md.get("config_radius_factor", "")))
         return context
 
 

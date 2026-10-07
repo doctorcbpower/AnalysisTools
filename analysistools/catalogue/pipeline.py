@@ -772,7 +772,7 @@ def _build_derived_stage(name: str, cls: type, job: "HostJob",
     if name == "halo_properties":
         return cls()
     if name == "orbital_properties":
-        return cls(job.epoch, job.host_row)
+        return cls(job.epoch, job.host_row, **options)
     if name == "star_formation_history":
         return cls(job.epoch, galaxy_backend, **options)
     if name in ("host_environment", "environment"):

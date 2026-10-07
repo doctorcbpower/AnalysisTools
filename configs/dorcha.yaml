@@ -6,7 +6,7 @@
 # derived_stages, not the pipeline code.
 
 project: dorcha
-schema_version: "1.0"          # -> analysistools.catalogue.schema.default_schema("1.0")
+schema_version: "1.1"          # -> default_schema("1.1"): 1.0 + the Orbit* columns of the orbit tool
 
 galaxy_backend: shark           # shark | hydro (backends.py)
 galaxy_backend_options:
@@ -36,6 +36,42 @@ derived_stages:                 # names resolve via derived.STAGES; order matter
 # anywhere in the pipeline itself. Values below are illustrative, not
 # recommendations -- pick numbers appropriate to your project.
 stage_options:
+  orbital_properties:
+    # Orbits come from analysistools.orbits -- either a precomputed sidecar
+    #   orbit_catalogue: /path/to/dorcha_orbits.h5
+    # or computed here from the trees (below). There is NO default: the
+    # tracks' unit system and the orbit definitions must be stated.
+    extended_fields: true          # write the schema-1.1 Orbit* columns
+    tracker_options:
+      # Size of ONE length / mass unit of the tree's tracks, in kpc / Msun.
+      # Verified for Dorcha's SubFind-HBT tree (Parameters: UnitLength =
+      # 3.0857e24 cm = 1 Mpc, UnitMass = 1.989e43 g = 1e10 Msun; positions
+      # comoving Mpc/h, velocities physical peculiar km/s -- load the tree
+      # with native_is_comoving=True, native_includes_h=True).
+      length_kpc: 1000.0
+      mass_msun: 1.0e10
+      # the Dorcha tree has Group_M_Crit200 but NO Group_R_Crit200, so R200c
+      # is derived from M200 and the cosmology (checked against a real
+      # Group_R_Crit200 to 0.01%):
+      radius_key: R200c_from_M200
+      potential: tree_nfw          # NFW from the host's tree track; null to skip
+                                   # orphan continuation and E/L quantities
+      radius_factor: 1.0           # x radius_key (2.0 -> 2 R200c)
+      hysteresis: 0.05             # fraction beyond R_ref needed to count a crossing
+      prominence: 0.05             # relative excursion to confirm peri/apocentre
+      n_sub: 16                    # Hermite sub-steps per snapshot interval
+      # --- satellite samples (resolution cuts, AND-ed) ------------------
+      # mass cut = max(min_mass, min_mass_fraction * host M200c at z=0).
+      # NB for the Dorcha MW hosts 1e-4 * M200c ~ 2e8 Msun ~ 900 particles,
+      # so the 50-particle cut is not the binding one (it matters only for
+      # hosts below ~1e10 Msun, i.e. effectively never).
+      min_mass_fraction: 1.0e-4
+      min_particles: 50
+      counts_basis: peak           # abundances / LFs / occupation: peak mass & particles
+      orbits_basis: final          # pericentres / eccentricities: values at the last resolved snapshot
+      orphans: true
+      orphan_max_r_over_ref: 1.0   # only continue subhaloes lost inside R_ref
+      dynamical_friction: false    # Chandrasekhar friction on orphans (off: a modelling choice)
   star_formation_history:
     # Upper edge MUST reach at least the age of the universe at z=0 for
     # your cosmology -- 13.5 here is illustrative only and is *not*

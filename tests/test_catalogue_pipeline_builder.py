@@ -91,7 +91,7 @@ def test_load_config_defaults_stage_options_to_empty():
     # the repo's real example config -- just check it loads without error
     # and every listed stage resolves.
     builder._load_config()
-    assert builder.schema.version == "1.0"
+    assert builder.schema.version == "1.1"        # example config opts in to the Orbit* columns
     assert "environment" in builder.stages
 
 
@@ -231,6 +231,10 @@ def _minimal_config(tmp_path, extra_stages=()):
         "derived_stages": ["halo_properties", "orbital_properties",
                           *extra_stages],
         "stage_options": {
+            "orbital_properties": {"tracker_options": {
+                "length_kpc": 1000.0, "mass_msun": 1.0e10, "potential": None,
+                "cosmology": {"h": 0.7, "omega_m": 0.3},
+                "fixed_radius_kpc": 300.0, "orphans": False}},
             "environment": {"mass_threshold": 1e8, "aperture_radius": 5.0},
             "host_environment": {
                 "isolation_radius_factor": 3.0,

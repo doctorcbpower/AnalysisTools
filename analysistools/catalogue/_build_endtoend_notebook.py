@@ -55,6 +55,8 @@ SNAPSHOT_PATH = "/path/to/snapshot.hdf5"
 HALO_PATH     = "/path/to/halo_catalogue.properties.0"
 HALO_FILEFORMAT = "VELOCIraptor"          # VELOCIraptor | AHF | SubFind | ...
 TREE_PATH     = "/path/to/tree.walkabletree.hdf5"
+TREE_LENGTH_KPC = 1.0     # one tree length unit in kpc (GADGET-4 default: kpc/h)
+TREE_MASS_MSUN  = 1.0e10   # one tree mass unit in Msun (GADGET-4 default: 1e10 Msun/h)
 SNAPNUM       = 199                        # matches HALO_PATH/TREE_PATH
 
 # SharkModel (galaxy_backend: shark) -- see analysistools/shark/model.py.
@@ -176,7 +178,7 @@ age_of_universe = shark_model.age_at_z(0.0)
 time_bin_upper_edge = age_of_universe + 0.1   # Gyr, safety margin
 
 config = {
-    "schema_version": "1.0",
+    "schema_version": "1.1",
     "galaxy_backend": "shark",
     "galaxy_backend_options": {
         "match_by": "position",
@@ -195,6 +197,19 @@ config = {
         "dorcha_specific",
     ],
     "stage_options": {
+        "orbital_properties": {
+            "extended_fields": True,        # schema 1.1 Orbit* columns
+            "tracker_options": {
+                # size of ONE length / mass unit of the tree's tracks, in
+                # kpc / Msun -- CHECK AGAINST YOUR TREE, nothing is guessed
+                "length_kpc": TREE_LENGTH_KPC,
+                "mass_msun": TREE_MASS_MSUN,
+                "potential": "tree_nfw",    # None: no orphans / E, L
+                "radius_key": "GroupR200",  # "infall" = crossing of this radius
+                "radius_factor": 1.0,
+                "orphans": True,
+            },
+        },
         "star_formation_history": {
             # yaml.safe_dump can't represent numpy scalars -- cast to
             # plain Python float, not just list(...) (which still leaves

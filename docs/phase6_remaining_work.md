@@ -137,7 +137,11 @@ condensed index.
     `tests/test_merger_tree_progenitors.py` use hand-built fixtures for
     unit coverage, plus real-data checks gated on the
     `ANALYSISTOOLS_SUBFIND_TREE_PATH` env var (skipped without it).
-- `OrbitalEnergy`/`OrbitalPeriod` (need a host potential model) and
+- **Orbits are now produced by `analysistools.orbits`** (see
+  [orbits.md](orbits.md)); `OrbitalPropertiesStage` reads its sidecar.
+  `OrbitalEnergy`/`OrbitalPeriod` are filled when a host potential /
+  >= 2 pericentres exist. Still deferred:
+- (superseded) `OrbitalEnergy`/`OrbitalPeriod` (need a host potential model) and
   `TidalTrackClass` (needs a tidal-tracks classification model, e.g.
   Peñarrubia et al. tables) — deliberately left out of
   `OrbitalPropertiesStage.outputs`, see its docstring.

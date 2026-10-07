@@ -71,6 +71,10 @@ class SubFindTreeData:
     # (snapnum, SubhaloNr) -> row index into the TreeHalos/* arrays
     lookup: Dict[Tuple[int, int], int]
 
+    # bound particle count of each subhalo (TreeHalos/SubhaloLen); None if
+    # the tree file doesn't carry it. Used for particle-count thresholds.
+    SubhaloLen: Optional[np.ndarray] = None
+
 
 def read_subfind_hbt(filename: str, logger=None) -> SubFindTreeData:
     """Read a SubFind-HBT tree file into a SubFindTreeData container.
@@ -119,6 +123,8 @@ def read_subfind_hbt(filename: str, logger=None) -> SubFindTreeData:
         SubhaloVelDisp = f["TreeHalos/SubhaloVelDisp"][()]
         SubhaloVmax = f["TreeHalos/SubhaloVmax"][()]
         SubhaloVmaxRad = f["TreeHalos/SubhaloVmaxRad"][()]
+        SubhaloLen = (f["TreeHalos/SubhaloLen"][()]
+                      if "SubhaloLen" in f["TreeHalos"] else None)
 
         TreeMainProgenitor = f["TreeHalos/TreeMainProgenitor"][()]
         TreeFirstHaloInFOFgroup = f["TreeHalos/TreeFirstHaloInFOFgroup"][()]
@@ -161,6 +167,7 @@ def read_subfind_hbt(filename: str, logger=None) -> SubFindTreeData:
         TreeFirstProgenitor=TreeFirstProgenitor,
         TreeNextProgenitor=TreeNextProgenitor,
         lookup=lookup,
+        SubhaloLen=SubhaloLen,
     )
 
 
@@ -283,6 +290,8 @@ def walk_subfind(data: SubFindTreeData, halo_id: int, snapnum: int,
     }
     if data.GrpR200 is not None:
         extra["GroupR200"] = data.GrpR200[idx_arr]
+    if getattr(data, "SubhaloLen", None) is not None:
+        extra["Len"] = data.SubhaloLen[idx_arr]      # bound particle count
 
     return HaloTrack(
         halo_id=halo_id, query_snapnum=snapnum, treefileformat="SubFind",
