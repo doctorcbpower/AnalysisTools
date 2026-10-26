@@ -96,17 +96,26 @@ gas, star = data.gas, data.star
 centre = np.average(star.pos, weights=star.mass, axis=0)
 R = pj.orientation_from_angular_momentum(gas.pos - centre, gas.vel, gas.mass, r_max=5.0)
 
-kw = dict(rotation=R, centre=centre, half_extent=15.0, npix=512)   # snapshot length units
+h = 0.6774                                   # Hubble parameter (use 1.0 if your units carry no h)
+# Arepo defaults: 1e10 Msun/h and kpc/h -> Sigma [Msun/kpc^2] = Sigma_code * 1e10 * h
+# (check UnitMass_in_g / UnitLength_in_cm in your param file; the factor is yours to set)
+to_msun_kpc2 = 1e10 * h
+
+kw = dict(rotation=R, centre=centre, half_extent=15.0, npix=512, length_unit="kpc/h")
 fig, axes = plt.subplots(2, 2, figsize=(10, 10))
 for col, view in enumerate(["face", "edge"]):
-    # gas: rho-weighted density = sum(m*rho)/sum(m)
-    g = pj.project(gas.pos, gas.mass, weight_by=gas.density, view=view, **kw)
+    # gas: rho-weighted density = sum(m*rho)/sum(m); rho in code units -> Msun/kpc^3
+    g = pj.project(gas.pos, gas.mass, weight_by=gas.density, view=view,
+                   scale=1e10 * h**2, label=r"$\langle\rho\rangle_\rho$ [M$_\odot$ kpc$^{-3}$]", **kw)
     g.plot(ax=axes[0, col], cmap="magma"); axes[0, col].set_title(f"gas, {view}-on")
     # stars: surface density
-    s = pj.project(star.pos, star.mass, view=view, **kw)
+    s = pj.project(star.pos, star.mass, view=view, scale=to_msun_kpc2,
+                   label=r"$\Sigma_\star$ [M$_\odot$ kpc$^{-2}$]", **kw)
     s.plot(ax=axes[1, col], cmap="gray"); axes[1, col].set_title(f"stars, {view}-on")
 plt.tight_layout()
 ```
+
+`Map.plot` labels the colour bar `log10 <label>` and sets the colour range to `dynamic_range` dex below the map maximum (default 5), so the faint kernel tails do not stretch the scale; pass `dynamic_range=None` to autoscale or `vmin`/`vmax` (log10 values) to fix it, e.g. to compare panels. `scale` and `label` are yours to set: nothing here converts code units for you.
 
 If the disc already lies in the xy plane, drop `rotation=R`. To weight stars by a stellar density instead, use `weight_by=pj.sph_density(star.pos, star.mass)`.
 
