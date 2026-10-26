@@ -1,11 +1,12 @@
 # Gridding and Rendering
 
-Three ways to turn particle/cell data into an image, in increasing order of fidelity (and dependency weight):
+Ways to turn particle/cell data into an image, in increasing order of fidelity (and dependency weight):
 
 | Tool | Method | In-process? | Best for |
 |------|--------|-------------|----------|
 | `GriddingTools` | NGP/CIC/Gaussian deposition onto a Cartesian grid | Yes | Quick, dependency-free diagnostics |
 | `VortraceRenderer` | Exact projection through the Arepo Voronoi mesh (`vortrace`) | Yes | Publication-quality Arepo figures, no grid choice needed |
+| `analysistools.projection` | Backend-neutral SPH projection (numba or cosmokit deposit), weighting, periodic boxes, orientation | Yes | Quantitative maps from particles/cells; see below |
 | `ImbasRenderer` | SPH-kernel/CIC projection via the standalone `imbas_renderer` executable | No — shells out | Large snapshots on HPC (MPI-parallel), animations |
 
 ## Gridding and Mesh Tools
@@ -48,15 +49,43 @@ fig, axes = renderer.plot_projections(
 
 A projection of `rho` is a **column density**. Because vortrace integrates whatever per-cell value you hand it, a density-weighted quantity is the ratio of two projections (see the galaxy recipe below).
 
-## Recipe: face-on and edge-on views of an isolated galaxy
+## Shared projection layer (`analysistools.projection`)
 
-Gas via vortrace (density-weighted density, ∫ρ² dz / ∫ρ dz), stars via the internal gridding (stellar surface density). Stars are particles, not mesh cells, so they go through `GriddingTools`, not vortrace.
+One backend-neutral set of routines for SPH-smoothed projections, so that figures from different deposit engines are directly comparable. It handles particle selection, periodic boxes, orientation, smoothing lengths and weighting; a *backend* only has to supply a k-nearest-neighbour search, an SPH density, and a 3D deposit summed along the line of sight.
+
+```python
+from analysistools import projection as pj
+
+H   = pj.smoothing_lengths(pos, k=32)                    # support radius = distance to k-th neighbour
+rho = pj.sph_density(pos, mass, k=32)                    # local density for particles that carry none (stars)
+R   = pj.orientation_from_angular_momentum(pos - c, vel, mass, r_max=5.0)
+
+m = pj.project(pos, mass, rotation=R, view="face", centre=c, half_extent=15.0, npix=512)
+m.plot(cmap="magma")                                     # Map.image is [ix, iy]; plot() handles the transpose
+```
+
+| Backend | Selected by | Notes |
+|---|---|---|
+| `numba` (default) | `backend="numba"` | scipy k-d tree + `GriddingTools.sph_assign`; no extra dependency |
+| `cosmokit` | `backend="cosmokit"` | C/OpenMP k-d tree and SPH deposit; needs `cosmokit` on `PYTHONPATH`. Isotropic cells (the `nz` hint is ignored) and a padded cubic mesh, so memory is ~`nmesh³` doubles; it raises with advice if that exceeds 4 GiB. Typically 1.5-2x faster. |
+
+`backend="auto"` is `numba` unless `ANALYSISTOOLS_PROJECTION_BACKEND` is set. Any object with `knn_h`, `sph_density` and `deposit_projected` can be passed as `backend`.
+
+Key points:
+
+- **Weighting.** `project(pos, weights)` is the surface density Σw/dA. With `weight_by=f` it returns Σ w f / Σ w along the line of sight. Since a cell's mass is m = ρV, `weights=mass, weight_by=rho` is exactly the ρ-weighted density ∫ρ² dz / ∫ρ dz.
+- **Periodic boxes.** Pass `boxsize=L`. Positions are wrapped about `centre`, and periodic images are added when the view region (plus kernel margin) is larger than half the box, so views that straddle or exceed the box edge are correct.
+- **Edges.** Particles just outside the window whose kernels reach in are included (`drop_outside` deposit): mass that falls off the grid is lost, not piled onto edge pixels.
+- **Smoothing.** `H` is the distance to the k-th neighbour (k=32 by default) for both backends, so they agree exactly; the cubic spline has support `H`. Pass `h=` to use your own, e.g. a cell's own radius.
+- **`sph_density` bias.** `include_self=True` (default, as in SPH and cosmokit) adds the particle's own kernel and biases a Poisson-sampled field high (~20% for k=48); use `include_self=False` for an unbiased estimate.
+- From cosmokit: `import cosmokit.projection as cp; cp.project(...)` delegates to the same code with `backend="cosmokit"` (AnalysisTools must be importable).
+
+### Recipe: face-on and edge-on views of an isolated galaxy
 
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
-from analysistools import SnapshotTools, VortraceRenderer
-from analysistools.gridding_tools import GriddingTools
+from analysistools import SnapshotTools, projection as pj
 
 snap = SnapshotTools(snapfileformat="HDF5", convention="AREPO")
 data = snap.read_snapshot("snap_010.hdf5")
@@ -64,43 +93,22 @@ data.LoadParticlesByType("gas")
 data.LoadParticlesByType("star")
 gas, star = data.gas, data.star
 
-# centre on the stellar centre of mass
 centre = np.average(star.pos, weights=star.mass, axis=0)
-gpos, spos = gas.pos - centre, star.pos - centre
+R = pj.orientation_from_angular_momentum(gas.pos - centre, gas.vel, gas.mass, r_max=5.0)
 
-# optional: rotate so the gas angular momentum (inside r < 5, code units) is along +z
-sel = np.linalg.norm(gpos, axis=1) < 5.0
-L = np.sum(np.cross(gpos[sel], gas.vel[sel]) * gas.mass[sel, None], axis=0)
-zhat = L / np.linalg.norm(L)
-xhat = np.cross([0, 1, 0], zhat); xhat /= np.linalg.norm(xhat)
-R = np.vstack([xhat, np.cross(zhat, xhat), zhat])      # rows = new axes
-gpos, spos = gpos @ R.T, spos @ R.T
-
-half, npix = 15.0, 512          # same units as the snapshot positions
-
-# gas: density-weighted density, face-on (line of sight z) and edge-on (y)
-num = VortraceRenderer(gpos, gas.density**2)
-den = VortraceRenderer(gpos, gas.density)
+kw = dict(rotation=R, centre=centre, half_extent=15.0, npix=512)   # snapshot length units
 fig, axes = plt.subplots(2, 2, figsize=(10, 10))
-for ax, axis, lbl in zip(axes[0], ["z", "y"], ["face-on", "edge-on"]):
-    n, ext = num.project_orthogonal(axis, half, npix, half_depth=half)
-    d, _   = den.project_orthogonal(axis, half, npix, half_depth=half)
-    ax.imshow(np.log10((n / d).T), origin="lower", extent=ext, cmap="magma")
-    ax.set_title(f"gas, {lbl}")
-
-# stars: mass surface density on a 2D grid
-gt = GriddingTools()
-lim, dA = (-half, half, -half, half), (2 * half / npix) ** 2
-for ax, cols, lbl in zip(axes[1], ([0, 1], [0, 2]), ["face-on", "edge-on"]):
-    m = gt.smooth_to_grid(spos[:, cols], star.mass, (npix, npix), lim,
-                          method="Gaussian", sigma=1.5)
-    with np.errstate(divide="ignore"):
-        ax.imshow(np.log10(m.T / dA), origin="lower", extent=lim, cmap="gray")
-    ax.set_title(f"stars, {lbl}")
+for col, view in enumerate(["face", "edge"]):
+    # gas: rho-weighted density = sum(m*rho)/sum(m)
+    g = pj.project(gas.pos, gas.mass, weight_by=gas.density, view=view, **kw)
+    g.plot(ax=axes[0, col], cmap="magma"); axes[0, col].set_title(f"gas, {view}-on")
+    # stars: surface density
+    s = pj.project(star.pos, star.mass, view=view, **kw)
+    s.plot(ax=axes[1, col], cmap="gray"); axes[1, col].set_title(f"stars, {view}-on")
 plt.tight_layout()
 ```
 
-If the disc already lies in the xy plane (typical for an isolated-galaxy IC), skip the rotation. To avoid vortrace for gas, deposit `gas.mass * gas.density` and `gas.mass` with `smooth_to_grid` and divide; that gives a mass-weighted density per pixel.
+If the disc already lies in the xy plane, drop `rotation=R`. To weight stars by a stellar density instead, use `weight_by=pj.sph_density(star.pos, star.mass)`.
 
 ## Rendering with imbas_renderer (HPC)
 

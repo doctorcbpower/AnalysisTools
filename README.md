@@ -70,6 +70,7 @@ pip install -e ".[rendering]"
 | `snapio_binary.py` | `read_binary` | Low-level GADGET binary format 1/2 snapshot I/O |
 | `ic_tools.py` | `ICTools` (extends `SnapshotTools`) | Build initial conditions: merge components, taper halo, rescale masses, excise types |
 | `gridding_tools.py` | `GriddingTools` | NGP/CIC mesh assignment, smoothing, Voronoi/nearest-neighbour slices, 3D grid plotting |
+| `projection.py` | `project`, `smoothing_lengths`, `sph_density`, `orientation_from_angular_momentum`, `Map` | Backend-neutral (numba / cosmokit) SPH projections with weighting, periodic boxes and face/edge-on views; see [docs/rendering.md](docs/rendering.md) |
 | `render_tools.py` | `VortraceRenderer`, `ImbasRenderer` | Exact Voronoi-mesh projections via `vortrace` (in-process); YAML/CLI + SLURM-script wrapper around the standalone, MPI-parallel `imbas_renderer` executable |
 | `profile_tools.py` | `ProfileTools`, `MassFunctionTools` | Volume/surface density, velocity dispersion, scale height profiles; halo mass functions |
 | `halo_tools.py` | `HaloTools` | Unified reader for halo catalogues (SubFind, AHF, VELOCIraptor, SWIFT FOF) |
