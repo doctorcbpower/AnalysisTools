@@ -44,22 +44,51 @@ _EDGE_ON = np.array([[1.0, 0.0, 0.0],
 # ---------------------------------------------------------------------------
 @dataclass
 class Map:
-    """A projected image. ``image[ix, iy]``; ``extent = (xmin, xmax, ymin, ymax)``."""
+    """A projected image. ``image[ix, iy]``; ``extent = (xmin, xmax, ymin, ymax)``.
+
+    ``label`` names the quantity with its physical units (mathtext allowed) and
+    is used for the colour bar; ``length_unit`` labels the axes.
+    """
     image: np.ndarray
     extent: tuple
     kind: str            # "surface_density" or "weighted_mean"
+    label: str = ""
+    length_unit: Optional[str] = None
 
     def log10(self):
         with np.errstate(divide="ignore", invalid="ignore"):
             return np.log10(self.image)
 
-    def plot(self, ax=None, log=True, **imshow_kw):
-        """imshow with the right orientation; returns (ax, image artist)."""
+    def limits(self, dynamic_range=5.0, vmax=None):
+        """(vmin, vmax) in log10: ``vmax`` (default: the map maximum) down by
+        ``dynamic_range`` dex, so faint kernel tails don't stretch the colour scale."""
+        data = self.log10()
+        top = np.nanmax(data[np.isfinite(data)]) if vmax is None else vmax
+        return top - dynamic_range, top
+
+    def plot(self, ax=None, log=True, dynamic_range=5.0, vmin=None, vmax=None,
+             colorbar=True, **imshow_kw):
+        """imshow with the right orientation and a physically labelled colour bar.
+
+        With ``log=True`` the colour range is ``dynamic_range`` dex below the map
+        maximum unless ``vmin``/``vmax`` (log10 values) are given; pass
+        ``dynamic_range=None`` to autoscale. Returns ``(ax, image artist)``.
+        """
         import matplotlib.pyplot as plt
         ax = ax or plt.gca()
         data = self.log10() if log else self.image
+        if log and dynamic_range is not None:
+            lo, hi = self.limits(dynamic_range, vmax)
+            vmin = lo if vmin is None else vmin
+            vmax = hi if vmax is None else vmax
         imshow_kw.setdefault("origin", "lower")
-        im = ax.imshow(data.T, extent=self.extent, **imshow_kw)
+        im = ax.imshow(data.T, extent=self.extent, vmin=vmin, vmax=vmax, **imshow_kw)
+        if self.length_unit:
+            ax.set_xlabel(f"x [{self.length_unit}]")
+            ax.set_ylabel(f"y [{self.length_unit}]")
+        if colorbar:
+            label = self.label or self.kind.replace("_", " ")
+            plt.colorbar(im, ax=ax, label=rf"$\log_{{10}}$ {label}" if log else label)
         return ax, im
 
 
@@ -216,7 +245,8 @@ def _select(d, R, half3, margin, boxsize):
 
 def project(pos, weights=None, h=None, *, view="face", rotation=None, centre=None,
             half_extent, half_depth=None, npix=512, nz=None, weight_by=None,
-            boxsize=None, k=32, backend="auto") -> Map:
+            boxsize=None, k=32, backend="auto", scale=1.0, label=None,
+            length_unit=None) -> Map:
     """
     Project SPH-smoothed particle data onto an image.
 
@@ -248,6 +278,15 @@ def project(pos, weights=None, h=None, *, view="face", rotation=None, centre=Non
         (∫ρ² dz / ∫ρ dz), since m = ρV.
     boxsize : float, optional
         Periodic box size; positions are wrapped about ``centre``.
+    scale : float, optional
+        Multiplies the image to convert it to physical units, e.g. for a surface
+        density from (1e10 Msun/h)/(kpc/h)^2 to Msun/kpc^2, ``scale = 1e10 * h``
+        (see the rendering docs). Applied to the image, not the kernels.
+    label : str, optional
+        Physical description of the quantity incl. units, used for the colour
+        bar, e.g. ``r"$\\Sigma_\\star$ [M$_\\odot$ kpc$^{-2}$]"``.
+    length_unit : str, optional
+        Unit of the positions, used for the axis labels (e.g. ``"kpc"``).
     """
     be = get_backend(backend)
     pos = np.ascontiguousarray(pos, dtype=np.float64)
@@ -292,8 +331,8 @@ def project(pos, weights=None, h=None, *, view="face", rotation=None, centre=Non
     extent = (-half_extent, half_extent, -half_extent, half_extent)
     if weight_by is None:
         dA = (2.0 * half_extent / npix) ** 2
-        return Map(maps[0] / dA, extent, "surface_density")
+        return Map(scale * maps[0] / dA, extent, "surface_density", label or "", length_unit)
     num, den = maps
     with np.errstate(invalid="ignore", divide="ignore"):
         img = num / np.where(den > 0, den, np.nan)
-    return Map(img, extent, "weighted_mean")
+    return Map(scale * img, extent, "weighted_mean", label or "", length_unit)

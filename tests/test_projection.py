@@ -141,3 +141,25 @@ def test_sph_assign_drop_outside_loses_mass_off_grid():
         kept[flag] = g.sum()
     assert kept[False] == pytest.approx(1.0)
     assert kept[True] == pytest.approx(0.5, abs=0.08)
+
+
+def test_scale_label_and_plot_range():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    pos = _blob()
+    m = np.ones(len(pos))
+    a = pj.project(pos, m, half_extent=8.0, npix=48)
+    b = pj.project(pos, m, half_extent=8.0, npix=48, scale=1e3, label="Sigma [x]",
+                   length_unit="kpc")
+    np.testing.assert_allclose(b.image, 1e3 * a.image)
+    assert b.label == "Sigma [x]" and b.length_unit == "kpc"
+
+    lo, hi = b.limits(dynamic_range=4.0)
+    assert hi - lo == pytest.approx(4.0) and hi == pytest.approx(np.log10(b.image.max()))
+    fig, ax = plt.subplots()
+    _, im = b.plot(ax=ax, dynamic_range=4.0)
+    assert im.get_clim() == pytest.approx((lo, hi))
+    assert "kpc" in ax.get_xlabel()
+    assert "Sigma [x]" in fig.axes[-1].get_ylabel()
+    plt.close(fig)
