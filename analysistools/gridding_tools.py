@@ -87,7 +87,8 @@ def _cubic_spline_kernel(q):
 
 
 @njit
-def _sph_assign_3d(grid, pos, values, h, xmin, ymin, zmin, dx, dy, dz, Nx, Ny, Nz):
+def _sph_assign_3d(grid, pos, values, h, xmin, ymin, zmin, dx, dy, dz, Nx, Ny, Nz,
+                   drop_outside):
     """
     Per-particle SPH-kernel deposition onto a 3D grid, using each
     particle's own smoothing length `h` (compact-support cubic spline,
@@ -109,6 +110,13 @@ def _sph_assign_3d(grid, pos, values, h, xmin, ymin, zmin, dx, dy, dz, Nx, Ny, N
     artifact this method replaces). A particle whose kernel support
     doesn't overlap any cell centre (h << spacing) falls back to
     nearest-grid-point deposition so its value is never silently dropped.
+
+    With ``drop_outside=True`` a particle whose kernel is only partly inside
+    the grid is normalised by its *unclipped* kernel sum, so the part of its
+    mass that falls outside the grid is lost rather than renormalised onto the
+    edge cells (what the default does). Use it when the grid is a window onto
+    a larger distribution. For very wide kernels (> 1e5 cells) the unclipped
+    sum is replaced by its resolved-kernel limit, pi h^3 / (dx dy dz).
     """
     n = pos.shape[0]
     for p in range(n):
@@ -135,19 +143,43 @@ def _sph_assign_3d(grid, pos, values, h, xmin, ymin, zmin, dx, dy, dz, Nx, Ny, N
             continue
 
         wsum = 0.0
-        for i in range(imin, imax + 1):
-            cx = xmin + (i + 0.5) * dx
-            ddx = cx - x
-            for j in range(jmin, jmax + 1):
-                cy = ymin + (j + 0.5) * dy
-                ddy = cy - y
-                for k in range(kmin, kmax + 1):
-                    cz = zmin + (k + 0.5) * dz
-                    ddz = cz - z
-                    r = np.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
-                    q = r / hp
-                    if q < 2.0:
-                        wsum += _cubic_spline_kernel(q)
+        # unclipped bounds: is the kernel only partly inside the grid?
+        uimin = int(np.floor((x - xmin - rmax) / dx))
+        uimax = int(np.ceil((x - xmin + rmax) / dx))
+        ujmin = int(np.floor((y - ymin - rmax) / dy))
+        ujmax = int(np.ceil((y - ymin + rmax) / dy))
+        ukmin = int(np.floor((z - zmin - rmax) / dz))
+        ukmax = int(np.ceil((z - zmin + rmax) / dz))
+        clipped = (uimin != imin or uimax != imax or ujmin != jmin
+                   or ujmax != jmax or ukmin != kmin or ukmax != kmax)
+        if drop_outside and clipped:
+            ncell = float(uimax - uimin + 1) * (ujmax - ujmin + 1) * (ukmax - ukmin + 1)
+            if ncell > 1.0e5:
+                wsum = np.pi * hp * hp * hp / (dx * dy * dz)
+            else:
+                for i in range(uimin, uimax + 1):
+                    ddx = xmin + (i + 0.5) * dx - x
+                    for j in range(ujmin, ujmax + 1):
+                        ddy = ymin + (j + 0.5) * dy - y
+                        for k in range(ukmin, ukmax + 1):
+                            ddz = zmin + (k + 0.5) * dz - z
+                            q = np.sqrt(ddx * ddx + ddy * ddy + ddz * ddz) / hp
+                            if q < 2.0:
+                                wsum += _cubic_spline_kernel(q)
+        else:
+            for i in range(imin, imax + 1):
+                cx = xmin + (i + 0.5) * dx
+                ddx = cx - x
+                for j in range(jmin, jmax + 1):
+                    cy = ymin + (j + 0.5) * dy
+                    ddy = cy - y
+                    for k in range(kmin, kmax + 1):
+                        cz = zmin + (k + 0.5) * dz
+                        ddz = cz - z
+                        r = np.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+                        q = r / hp
+                        if q < 2.0:
+                            wsum += _cubic_spline_kernel(q)
 
         if wsum <= 0.0:
             i = int(np.floor((x - xmin) / dx))
@@ -201,7 +233,8 @@ class GriddingTools:
             _cic_assign_2d(grid, coords, values, gs[0], gs[1])
 
     @staticmethod
-    def sph_assign(grid, positions, values, smoothing_lengths, grid_limits, grid_size):
+    def sph_assign(grid, positions, values, smoothing_lengths, grid_limits, grid_size,
+                   drop_outside=False):
         """
         Per-particle SPH-kernel (cubic spline) deposition onto a 3D grid,
         using each particle's own smoothing length rather than a single
@@ -209,6 +242,9 @@ class GriddingTools:
         details (mass-conserving per particle, non-periodic, correct for
         anisotropic grid spacing). 3D only -- unlike ngp_assign/cic_assign,
         there is no 2D variant (no current caller needs one).
+
+        ``drop_outside=True``: mass of a kernel that overlaps the grid edge is
+        lost off the grid instead of being renormalised onto the edge cells.
         """
         if grid.ndim != 3:
             raise ValueError("sph_assign only supports 3D grids")
@@ -217,7 +253,8 @@ class GriddingTools:
         dz = (grid_limits[5] - grid_limits[4]) / grid_size[2]
         _sph_assign_3d(grid, positions, values, smoothing_lengths,
                         grid_limits[0], grid_limits[2], grid_limits[4],
-                        dx, dy, dz, grid_size[0], grid_size[1], grid_size[2])
+                        dx, dy, dz, grid_size[0], grid_size[1], grid_size[2],
+                        bool(drop_outside))
 
     def smooth_to_grid(self, positions, values, grid_size, grid_limits,
                        method="NGP", sigma=1.0, filter_sigma=None,
