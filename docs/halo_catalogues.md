@@ -65,6 +65,23 @@ pos  = hm.position(redshift=0.0)
 vol  = hm.volume(redshift=0.0)   # respects little_h/native_includes_h too
 ```
 
+## AHF catalogues
+
+`read_ahf` (in `haloio_ahf.py`) reads the `.AHF_halos` table. Columns are selected by the names in the `#` header line (`ID(1) hostHalo(2) ...`), not by position, so a different AHF version raises an error that prints the header instead of shifting columns silently. Every row of the file is returned as the Group table; the rows with `hostHalo > 0` (inside another halo) are also returned as the Subhalo table. A `hostHalo` of 0 or -1 means the halo is not inside another halo. Values are as stored in the file, and the file does not give `HubbleParam`, so pass `native_includes_h` explicitly (see above).
+
+Two further readers are in the same module and are not used by `HaloTools`:
+
+```python
+from analysistools.haloio_ahf import read_ahf_substructure, read_ahf_particles, AHF_PTYPE_STAR
+
+subs = read_ahf_substructure("run.AHF_substructure")      # {host ID: array of subhalo IDs}
+blocks = read_ahf_particles("run.AHF_particles", wanted=[host_id])
+ids, types = blocks[host_id]["ids"], blocks[host_id]["types"]
+star_ids = ids[types == AHF_PTYPE_STAR]                  # GADGET types: 0 gas, 1 DM, 4 star
+```
+
+`read_ahf_substructure` expects, for each host, a line with the host ID and the number of subhalos followed by one line listing their IDs. It raises an error naming the line if the file differs. `read_ahf_particles` skips blocks that are not wanted and refuses a file with no particle-type column. Each block carries `n_declared`, the block size in its header, which should equal `NumPart` in the halo table; comparing the two is left to the caller.
+
 ## Constructor Options (`HaloTools`)
 
 ```python

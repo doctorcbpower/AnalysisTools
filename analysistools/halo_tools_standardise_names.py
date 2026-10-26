@@ -67,15 +67,16 @@ CATALOGUE_MAPPINGS: Dict[Tuple[str, str], Dict[str, str]] = {
         "num_part": "NumPart",
     },
     ("AHF", "Subhalo"): {
-        # Native names from haloio_ahf.read_ahf()'s .AHF_substructure
-        # parsing. No distinct subhalo ID or particle-count column is read,
-        # hence ROW_INDEX_SENTINEL and no "num_part" entry (omitted, rather
-        # than pointing at a field that doesn't exist).
+        # Native names from haloio_ahf.read_ahf(). The subhalo table is the
+        # set of rows of the .AHF_halos file that sit inside another halo
+        # (hostHalo > 0), so it carries the same ID and particle count
+        # columns as the Group table.
         "mass": "SubhaloMass",
         "pos": "Pos",
         "vel": "Vel",
         "radius": "Rvir",
-        "halo_id": ROW_INDEX_SENTINEL,
+        "halo_id": "HaloID",
+        "num_part": "NumPart",
     },
     ("VELOCIraptor", "Group"): {
         "mass": "Mass_200crit",
