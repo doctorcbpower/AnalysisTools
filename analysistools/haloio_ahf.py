@@ -39,6 +39,9 @@ _REQUIRED = ["ID", "hostHalo", "numSubStruct", "Mvir", "npart",
 # Names that are kept if present.
 _OPTIONAL = ["Vmax", "com_offset", "mbp_offset"]
 
+# Newer name -> older name, for columns that were renamed between AHF versions.
+_ALIASES = {"Mhalo": "Mvir", "Rhalo": "Rvir"}
+
 # AHF particle types follow the GADGET convention.
 AHF_PTYPE_GAS = 0
 AHF_PTYPE_DM = 1
@@ -50,6 +53,11 @@ def _read_halo_columns(filename: str) -> Dict[str, int]:
     with open(filename) as handle:
         header = handle.readline()
     columns = {name: int(number) - 1 for name, number in _HEADER_FIELD.findall(header)}
+    # Newer AHF versions call these Mhalo and Rhalo (the mass and radius inside the
+    # overdensity the run was configured with, for example 200 times critical).
+    for current_name, older_name in _ALIASES.items():
+        if older_name not in columns and current_name in columns:
+            columns[older_name] = columns[current_name]
     missing = [name for name in _REQUIRED if name not in columns]
     if missing:
         raise ValueError(

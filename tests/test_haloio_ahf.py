@@ -133,3 +133,21 @@ def test_particles_missing_halo_and_missing_type_column(tmp_path):
     _write_particles(path, [(10, [(1, 4)])], with_type=False)
     with pytest.raises(ValueError, match="type column"):
         read_ahf_particles(path, wanted=[10])
+
+
+def test_newer_ahf_names_mhalo_and_rhalo_are_accepted(tmp_path):
+    header = HEADER.replace("Mvir(4)", "Mhalo(4)").replace("Rvir(12)", "Rhalo(12)")
+    path = str(tmp_path / "a.AHF_halos")
+    _write_halos(path, [_row(1, 0, 0, 1e14, 50, rvir=777.0)], header=header)
+    _, halos, _ = read_ahf(path)
+    assert halos["Mass"][0] == 1e14 and halos["Rvir"][0] == 777.0
+
+
+def test_header_with_adjacent_fields_and_many_columns(tmp_path):
+    # Real headers can run names together, for example "Eax(27)Eay(28)", and have
+    # dozens of columns after the ones we read.
+    header = HEADER + " v_esc(18) sigV(19) lambda(20) Eax(27)Eay(28)"
+    path = str(tmp_path / "a.AHF_halos")
+    _write_halos(path, [_row(1, 0, 0, 1e14, 50)], header=header)
+    _, halos, _ = read_ahf(path)
+    assert halos["NumPart"][0] == 50
