@@ -203,10 +203,14 @@ class ICTools(SnapshotTools):
             raise ValueError(f"No particles of type {ptype} or zero total mass")
 
         scale = target_mass / current_mass
+        # self.mass may be shared with the SnapshotData returned by
+        # read_snapshot; copy so the rescale doesn't alter that object
+        self.mass = self.mass.copy()
         self.mass[mask] *= scale
 
         # Keep mass_table consistent if this type uses a uniform mass
         if hasattr(self, 'mass_table') and self.mass_table[ptype] > 0.0:
+            self.mass_table = self.mass_table.copy()
             self.mass_table[ptype] *= scale
 
         self.logger.info(
@@ -241,13 +245,13 @@ class ICTools(SnapshotTools):
         gas_before = self.ptype == self.gas_type
 
         for attr in ('pos', 'vel', 'mass', 'pids', 'ptype', 'potential'):
-            if hasattr(self, attr):
+            if getattr(self, attr, None) is not None:
                 setattr(self, attr, getattr(self, attr)[mask])
 
         # Gas-only arrays need a gas-specific submask
         gas_mask = mask[gas_before]
         for attr in ('u', 'rho', 'hsml'):
-            if hasattr(self, attr):
+            if getattr(self, attr, None) is not None:
                 setattr(self, attr, getattr(self, attr)[gas_mask])
 
         # Update counts

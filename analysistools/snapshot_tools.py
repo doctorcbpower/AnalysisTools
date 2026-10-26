@@ -586,6 +586,11 @@ class SnapshotTools:
                 for t, n in enumerate(data.num_part_total)
             ])
 
+        # Mirror the data onto this object (sharing the arrays, no copy):
+        # write_snapshot() and ICTools operate on self.pos, self.ptype, ...
+        for attr_name, value in vars(data).items():
+            setattr(self, attr_name, value)
+
         return data
 
     def write_snapshot(
