@@ -11,7 +11,7 @@ AnalysisTools has grown organically around four kinds of data — snapshots, hal
 
 | Source | Class | Construction | Load | Field access |
 |---|---|---|---|---|
-| Snapshot | `SnapshotTools` | `SnapshotTools(snapfileformat="HDF5")` | `read_snapshot(path)` | attributes: `snap.pos`, `snap.dm.pos` after `LoadParticlesByType` |
+| Snapshot | `SnapshotTools` | `SnapshotTools(snapfileformat="HDF5")` | `read_snapshot(path)` | attributes on the *returned* `SnapshotData`: `data = snap.read_snapshot(path)`; `data.pos`, `data.dm.pos` after `data.LoadParticlesByType(...)` |
 | Halo catalogue | `HaloTools` | `HaloTools(comoving_units=True)` | `read_catalogue(path, fileformat=...)` | returned dict / `standardise_names()` |
 | Halo catalogue (multi-z) | `HaloModel` | paths given to constructor | lazy, on first access | `get(field, redshift)` + accessors (`mvir`, `rvir`, …) |
 | Merger tree | `MergerTreeTools` | `MergerTreeTools(path, treefileformat=...)` | in constructor (`read_tree`) | `HaloTrack` objects via `get_track` / `from_halo` |

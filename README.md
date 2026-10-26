@@ -65,7 +65,7 @@ pip install -e ".[rendering]"
 
 | Module | Main class(es) / functions | Purpose |
 |--------|------------------------------|---------|
-| `snapshot_tools.py` | `SnapshotTools`, `select_particles`, `place_points_in_mesh` | Read/write particle snapshots, split by type, geometric selection |
+| `snapshot_tools.py` | `SnapshotTools`, `SnapshotData`, `select_particles`, `place_points_in_mesh` | Read particle snapshots (`read_snapshot` returns a `SnapshotData`), split by type, geometric selection |
 | `snapio_hdf5.py` | `read_hdf5`, `write_hdf5` | Low-level HDF5 snapshot I/O (used by `SnapshotTools`) |
 | `snapio_binary.py` | `read_binary` | Low-level GADGET binary format 1/2 snapshot I/O |
 | `ic_tools.py` | `ICTools` (extends `SnapshotTools`) | Build initial conditions: merge components, taper halo, rescale masses, excise types |
